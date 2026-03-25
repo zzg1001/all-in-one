@@ -1,7 +1,11 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted, computed } from 'vue'
+import { ref, nextTick, onMounted, computed, watch } from 'vue'
 import { dataNotesApi, type DataNote } from '@/api'
 import config from '@/config'
+
+const props = defineProps<{
+  departmentName?: string
+}>()
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -22,7 +26,14 @@ const fileInputRef = ref<HTMLInputElement | null>(null)
 const currentFolderId = ref<string | null>(null)
 const folderPath = ref<{ id: string | null; name: string }[]>([{ id: null, name: 'root' }])
 const currentLevel = computed(() => folderPath.value.length - 1)
-const canCreateFolder = computed(() => currentLevel.value < 3)
+// 是否可以创建文件夹（根目录不能创建，且最多3层）
+const canCreateFolder = computed(() => {
+  // 如果在部门根目录，不能创建文件夹
+  if (props.departmentName && currentFolderId.value === null) {
+    return false
+  }
+  return currentLevel.value < 3
+})
 
 // 选择模式
 const selectedIds = ref<Set<string>>(new Set())
@@ -72,11 +83,103 @@ const toast = (message: string) => {
   }, 2000)
 }
 
+// 部门根文件夹ID（不能删除、不能修改）
+const departmentFolderId = ref<string | null>(null)
+// 防止重复初始化的锁
+let isInitializing = false
+let lastInitDepartment = ''
+
+// 初始化部门文件夹（如果有部门名称，自动创建文件夹，但不自动进入）
+const initDepartmentFolder = async () => {
+  console.log('[initDepartmentFolder] departmentName:', props.departmentName)
+
+  if (!props.departmentName) {
+    departmentFolderId.value = null
+    currentFolderId.value = null
+    folderPath.value = [{ id: null, name: 'root' }]
+    return
+  }
+
+  // 防止重复初始化同一个部门
+  if (isInitializing && lastInitDepartment === props.departmentName) {
+    console.log('[initDepartmentFolder] 跳过，正在初始化中')
+    return
+  }
+
+  isInitializing = true
+  lastInitDepartment = props.departmentName
+
+  try {
+    // 查找是否已有该部门的文件夹
+    const allNotes = await dataNotesApi.getAll({ parentId: null })
+    console.log('[initDepartmentFolder] 根目录文件夹:', allNotes.filter(n => n.file_type === 'folder').map(n => ({ id: n.id, name: n.name })))
+
+    const existingFolder = allNotes.find(
+      n => n.file_type === 'folder' && n.name === props.departmentName
+    )
+    console.log('[initDepartmentFolder] 找到现有文件夹:', existingFolder?.id, existingFolder?.name)
+
+    if (existingFolder) {
+      departmentFolderId.value = existingFolder.id
+      console.log('[initDepartmentFolder] 使用现有文件夹')
+    } else {
+      console.log('[initDepartmentFolder] 未找到，准备创建...')
+      // 创建部门文件夹（后端会检查重复）
+      const newFolder = await dataNotesApi.createFolder({
+        name: props.departmentName,
+        parent_id: undefined,
+        item_ids: []
+      })
+      console.log('[initDepartmentFolder] 创建/返回文件夹:', newFolder.id, newFolder.name)
+      departmentFolderId.value = newFolder.id
+    }
+
+    // 停留在根目录，显示部门文件夹
+    currentFolderId.value = null
+    folderPath.value = [{ id: null, name: 'root' }]
+  } catch (e) {
+    console.error('Failed to init department folder:', e)
+  } finally {
+    isInitializing = false
+  }
+}
+
+// 判断是否可以删除（部门文件夹不能删除）
+const canDelete = (noteId: string) => {
+  return noteId !== departmentFolderId.value
+}
+
+// 判断是否可以编辑名字（部门文件夹不能编辑）
+const canEdit = (noteId: string) => {
+  return noteId !== departmentFolderId.value
+}
+
+// 是否在根目录（有部门时，根目录只能看不能上传）
+const isAtDepartmentRoot = computed(() => {
+  return props.departmentName && currentFolderId.value === null
+})
+
+// 是否可以上传（在部门文件夹内或子文件夹内可以上传）
+const canUpload = computed(() => {
+  return !isAtDepartmentRoot.value
+})
+
 // 加载便签
 const loadNotes = async () => {
   isLoading.value = true
   try {
-    notes.value = await dataNotesApi.getAll({ parentId: currentFolderId.value })
+    let allNotes = await dataNotesApi.getAll({
+      parentId: currentFolderId.value
+    })
+
+    // 如果在根目录且有部门名称，只显示当前部门的文件夹
+    if (currentFolderId.value === null && props.departmentName) {
+      allNotes = allNotes.filter(n =>
+        n.file_type === 'folder' && n.name === props.departmentName
+      )
+    }
+
+    notes.value = allNotes
   } catch (e) {
     console.error('Failed to load notes:', e)
   } finally {
@@ -105,6 +208,10 @@ const navigateTo = (index: number) => {
 
 // 选择/取消选择（单击）
 const toggleSelect = (id: string) => {
+  // 部门文件夹不能选中
+  if (id === departmentFolderId.value) {
+    return
+  }
   if (selectedIds.value.has(id)) {
     selectedIds.value.delete(id)
   } else {
@@ -166,11 +273,16 @@ const notifyDataChange = () => {
 
 // 批量删除
 const batchDelete = async () => {
-  const ids = Array.from(selectedIds.value)
+  // 过滤掉部门文件夹
+  const ids = Array.from(selectedIds.value).filter(id => canDelete(id))
+  if (ids.length === 0) {
+    toast('没有可删除的文件')
+    return
+  }
   const count = ids.length
   try {
     // 先从列表移除
-    notes.value = notes.value.filter(n => !selectedIds.value.has(n.id))
+    notes.value = notes.value.filter(n => !ids.includes(n.id))
     selectedIds.value.clear()
     toast(`正在删除 ${count} 个文件...`)
     // 逐个删除
@@ -232,6 +344,11 @@ const toggleFavorite = async (id: string, e: Event) => {
 // 删除便签
 const deleteNote = async (id: string, e: Event) => {
   e.stopPropagation()
+  // 部门文件夹不能删除
+  if (!canDelete(id)) {
+    toast('部门文件夹不能删除')
+    return
+  }
   const note = notes.value.find(n => n.id === id)
   const fileName = note?.name || '文件'
   try {
@@ -252,6 +369,11 @@ const deleteNote = async (id: string, e: Event) => {
 // 单击选中
 const clickCard = (note: DataNote) => {
   if (editingId.value) return
+  // 部门文件夹单击直接进入
+  if (note.id === departmentFolderId.value) {
+    enterFolder(note)
+    return
+  }
   toggleSelect(note.id)
 }
 
@@ -284,6 +406,10 @@ const handleDragStart = (e: DragEvent, note: DataNote) => {
 // 开始编辑名字
 const startEdit = (note: DataNote, e: Event) => {
   e.stopPropagation()
+  // 部门文件夹不能编辑
+  if (!canEdit(note.id)) {
+    return
+  }
   editingId.value = note.id
   editingName.value = note.name
   nextTick(() => {
@@ -378,7 +504,8 @@ const handleDragEnter = (e: DragEvent) => {
   e.preventDefault()
   e.stopPropagation()
   dragCounter++
-  if (e.dataTransfer?.types.includes('Files')) {
+  // 根目录不允许上传，不显示拖拽效果
+  if (e.dataTransfer?.types.includes('Files') && canUpload.value) {
     isDragging.value = true
   }
 }
@@ -402,93 +529,58 @@ const handleDrop = (e: DragEvent) => {
   e.stopPropagation()
   dragCounter = 0
   isDragging.value = false
+  // 根目录不允许上传
+  if (!canUpload.value) {
+    toast('请进入文件夹后上传')
+    return
+  }
   if (e.dataTransfer?.files.length) {
     uploadFiles(Array.from(e.dataTransfer.files))
   }
 }
 
-// 上传文件
+// 上传文件（多文件直接铺开，不创建文件夹）
 const uploadFiles = async (files: File[]) => {
   isUploading.value = true
   let successCount = 0
-  let targetFolderId = currentFolderId.value
-  let newFolder: DataNote | null = null
 
-  // 多文件上传时，先创建文件夹
-  if (files.length > 1) {
-    try {
-      newFolder = await dataNotesApi.createFolder({
-        name: '新建文件夹',
-        parent_id: currentFolderId.value || undefined,
-        item_ids: []
-      })
-      targetFolderId = newFolder.id
-      notes.value.unshift(newFolder)
-    } catch (e) {
-      console.error('Failed to create folder:', e)
-      toast('创建文件夹失败')
-      isUploading.value = false
-      return
-    }
-  }
-
-  for (const file of files) {
-    try {
-      // 上传文件到服务器
-      const formData = new FormData()
-      formData.append('file', file)
-      const res = await fetch(`${config.serverBaseUrl}/api/upload`, {
-        method: 'POST',
-        body: formData
-      })
-      const data = await res.json()
-
-      if (data.url) {
-        // 创建便签
-        const ext = file.name.split('.').pop()?.toLowerCase() || ''
-        const newNote = await dataNotesApi.create({
-          name: file.name,
-          file_type: ext,
-          file_url: data.url,
-          file_size: formatFileSize(file.size),
-          parent_id: targetFolderId || undefined
+  try {
+    for (const file of files) {
+      try {
+        // 上传文件到服务器
+        const formData = new FormData()
+        formData.append('file', file)
+        const res = await fetch(`${config.serverBaseUrl}/api/upload`, {
+          method: 'POST',
+          body: formData
         })
-        // 单文件上传时添加到列表，多文件时文件在文件夹内
-        if (files.length === 1) {
-          notes.value.unshift(newNote)
-        }
-        successCount++
-      }
-    } catch (e) {
-      console.error('Failed to upload file:', e)
-      toast(`上传 ${file.name} 失败`)
-    }
-  }
+        const data = await res.json()
 
-  isUploading.value = false
+        if (data.url) {
+          // 创建便签
+          const ext = file.name.split('.').pop()?.toLowerCase() || ''
+          const newNote = await dataNotesApi.create({
+            name: file.name,
+            file_type: ext,
+            file_url: data.url,
+            file_size: formatFileSize(file.size),
+            parent_id: currentFolderId.value || undefined
+          })
+          notes.value.unshift(newNote)
+          successCount++
+        }
+      } catch (e) {
+        console.error('Failed to upload file:', e)
+        toast(`上传 ${file.name} 失败`)
+      }
+    }
+  } finally {
+    isUploading.value = false
+  }
 
   if (successCount > 0) {
     toast(`已上传 ${successCount} 个文件`)
     notifyDataChange()
-
-    // 多文件上传完成后，更新文件夹项目数并进入编辑名称状态
-    if (newFolder) {
-      // 更新文件夹的 item_count
-      const folderInList = notes.value.find(n => n.id === newFolder!.id)
-      if (folderInList) {
-        folderInList.item_count = successCount
-      }
-      // 自动进入编辑名字状态
-      nextTick(() => {
-        editingId.value = newFolder!.id
-        editingName.value = newFolder!.name
-        nextTick(() => {
-          const input = document.querySelector('.edit-input') as HTMLInputElement
-          input?.focus()
-          input?.select()
-        })
-      })
-    }
   }
 }
 
@@ -500,8 +592,16 @@ const formatFileSize = (bytes: number) => {
 }
 
 onMounted(async () => {
+  await initDepartmentFolder()
   await loadNotes()
   nextTick(() => updateScrollState())
+})
+
+// 监听部门变化，重新初始化（只在值真正变化时触发）
+watch(() => props.departmentName, async (newVal, oldVal) => {
+  if (newVal === oldVal) return
+  await initDepartmentFolder()
+  await loadNotes()
 })
 </script>
 
@@ -514,7 +614,7 @@ onMounted(async () => {
 
     <!-- 头部 -->
     <header class="modal-header">
-      <span class="header-title">File Manager</span>
+      <span class="header-title">{{ props.departmentName ? props.departmentName + ' File Manage' : 'File Manage' }}</span>
       <span class="header-count">{{ notes.length }}</span>
       <!-- 面包屑导航 -->
       <div class="breadcrumb">
@@ -588,7 +688,7 @@ onMounted(async () => {
                 @click="toggleFavorite(note.id, $event)"
                 :title="note.is_favorited ? '取消收藏' : '收藏'"
               >{{ note.is_favorited ? '★' : '☆' }}</button>
-              <button class="action-btn del" @click="deleteNote(note.id, $event)" title="删除">×</button>
+              <button v-if="canDelete(note.id)" class="action-btn del" @click="deleteNote(note.id, $event)" title="删除">×</button>
             </div>
             <input
               v-if="editingId === note.id"
@@ -604,10 +704,11 @@ onMounted(async () => {
               class="card-name"
               :title="note.name"
               @click.stop="startEdit(note, $event)"
+              :class="{ 'no-edit': !canEdit(note.id) }"
             >{{ note.file_type === 'folder' ? note.name : getDisplayName(note.name) }}</div>
           </div>
-          <!-- 上传卡片（前16个未满时显示在这里） -->
-          <div v-if="firstNotes.length < 16" class="card upload-card" @click="triggerUpload">
+          <!-- 上传卡片（前16个未满时显示在这里，根目录不显示） -->
+          <div v-if="firstNotes.length < 16 && canUpload" class="card upload-card" @click="triggerUpload">
             <span class="upload-icon">+</span>
             <span class="upload-text">{{ isUploading ? '上传中...' : '上传' }}</span>
           </div>
@@ -634,7 +735,7 @@ onMounted(async () => {
                 @click="toggleFavorite(note.id, $event)"
                 :title="note.is_favorited ? '取消收藏' : '收藏'"
               >{{ note.is_favorited ? '★' : '☆' }}</button>
-              <button class="action-btn del" @click="deleteNote(note.id, $event)" title="删除">×</button>
+              <button v-if="canDelete(note.id)" class="action-btn del" @click="deleteNote(note.id, $event)" title="删除">×</button>
             </div>
             <input
               v-if="editingId === note.id"
@@ -650,10 +751,11 @@ onMounted(async () => {
               class="card-name"
               :title="note.name"
               @click.stop="startEdit(note, $event)"
+              :class="{ 'no-edit': !canEdit(note.id) }"
             >{{ note.file_type === 'folder' ? note.name : getDisplayName(note.name) }}</div>
           </div>
-          <!-- 上传卡片（前16个满了显示在这里） -->
-          <div v-if="firstNotes.length >= 16" class="card upload-card" @click="triggerUpload">
+          <!-- 上传卡片（前16个满了显示在这里，根目录不显示） -->
+          <div v-if="firstNotes.length >= 16 && canUpload" class="card upload-card" @click="triggerUpload">
             <span class="upload-icon">+</span>
             <span class="upload-text">{{ isUploading ? '上传中...' : '上传' }}</span>
           </div>
@@ -1106,6 +1208,11 @@ onMounted(async () => {
 
 .card-name:hover {
   background: rgba(0,0,0,0.04);
+}
+
+.card-name.no-edit {
+  cursor: default;
+  pointer-events: none;
 }
 
 .edit-input {

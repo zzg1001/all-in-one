@@ -1,18 +1,30 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { RouterView } from 'vue-router'
+import { ref, computed } from 'vue'
+import { RouterView, useRoute } from 'vue-router'
 import LogPanel from '@/components/common/LogPanel.vue'
 import DataNotesTab from '@/components/common/DataNotesTab.vue'
 import GlobalNav from '@/components/common/GlobalNav.vue'
 
+const route = useRoute()
 const showLogPanel = ref(false)
+
+// 从 URL 获取 agent 名称，提取部门名（去掉 " Agent" 后缀）
+const departmentName = computed(() => {
+  const agentName = route.query.agent as string
+  if (agentName) {
+    const decoded = decodeURIComponent(agentName)
+    // 去掉 " Agent" 后缀
+    return decoded.replace(/ Agent$/, '')
+  }
+  return ''
+})
 </script>
 
 <template>
   <GlobalNav />
   <RouterView />
   <LogPanel v-model:show="showLogPanel" />
-  <DataNotesTab />
+  <DataNotesTab :department-name="departmentName" />
 </template>
 
 <style>

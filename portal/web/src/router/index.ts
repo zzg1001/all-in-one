@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import SkillsView from '../views/SkillsView.vue'
+import config from '../config'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -8,6 +9,14 @@ const router = createRouter({
       path: '/',
       name: 'home',
       component: SkillsView,
+      beforeEnter: (to, from, next) => {
+        // 如果没有 agent 参数，重定向到首页
+        if (!to.query.agent) {
+          window.location.href = config.homeUrl
+          return
+        }
+        next()
+      },
     },
     {
       path: '/agents',

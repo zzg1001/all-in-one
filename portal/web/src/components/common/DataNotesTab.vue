@@ -2,6 +2,10 @@
 import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { dataNotesApi } from '@/api'
 
+const props = defineProps<{
+  departmentName?: string
+}>()
+
 const noteCount = ref(0)
 const showModal = ref(false)
 const isPinned = ref(false)  // 点击弹框内部后固定
@@ -9,8 +13,23 @@ let hideTimeout: number | null = null
 
 const loadNoteCount = async () => {
   try {
-    const notes = await dataNotesApi.getAll()
-    noteCount.value = notes.length
+    if (props.departmentName) {
+      // 查找部门文件夹
+      const allNotes = await dataNotesApi.getAll({ parentId: null })
+      const folder = allNotes.find(
+        n => n.file_type === 'folder' && n.name === props.departmentName
+      )
+      if (folder) {
+        // 获取文件夹内的文件数
+        const folderNotes = await dataNotesApi.getAll({ parentId: folder.id })
+        noteCount.value = folderNotes.length
+      } else {
+        noteCount.value = 0
+      }
+    } else {
+      const notes = await dataNotesApi.getAll({ parentId: null })
+      noteCount.value = notes.length
+    }
   } catch (e) {
     console.error('Failed to load note count:', e)
   }
@@ -90,6 +109,11 @@ watch(isPinned, (val) => {
 
 onMounted(() => loadNoteCount())
 
+// 监听部门变化，重新加载数据
+watch(() => props.departmentName, () => {
+  loadNoteCount()
+})
+
 onBeforeUnmount(() => {
   clearHideTimeout()
   document.removeEventListener('click', handleClickOutside)
@@ -109,7 +133,7 @@ defineExpose({ refresh: loadNoteCount })
       @mouseleave="handleTabLeave"
       title="数据便签"
     >
-      <span class="tab-label">data</span>
+      <span class="tab-label">{{ props.departmentName ? props.departmentName + ' 数据' : '数据' }}</span>
       <span v-if="noteCount > 0" class="badge">{{ noteCount > 99 ? '99+' : noteCount }}</span>
     </div>
 
@@ -122,7 +146,7 @@ defineExpose({ refresh: loadNoteCount })
         @mouseleave="handleModalLeave"
         @click="handleModalClick"
       >
-        <DataNotesModal @close="handleClose" />
+        <DataNotesModal :department-name="props.departmentName" @close="handleClose" />
       </div>
     </Transition>
   </Teleport>
@@ -143,7 +167,8 @@ export default {
   transform: translateY(-50%);
   z-index: 9998;
   width: 38px;
-  height: 56px;
+  min-height: 56px;
+  padding: 12px 6px;
   background: linear-gradient(135deg, #fffef5, #fff9e8);
   border: 1px solid #e8e0c8;
   border-right: none;
@@ -166,10 +191,11 @@ export default {
 }
 
 .tab-label {
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
   color: #5a4a2a;
-  letter-spacing: 1px;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
 }
 
 .badge {

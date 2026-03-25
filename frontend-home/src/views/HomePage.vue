@@ -47,7 +47,7 @@ const toggleLocale = () => {
         </div>
         <div class="products-grid">
           <!-- HR部门 Agent -->
-          <a :href="`${config.portalUrl}?from=home`" target="_blank" class="product-card card-blue">
+          <a :href="`${config.portalUrl}?from=home&agent=${encodeURIComponent('HR部门 Agent')}&theme=blue`" target="_blank" class="product-card card-blue">
             <div class="card-icon">
               <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
@@ -59,7 +59,7 @@ const toggleLocale = () => {
           </a>
 
           <!-- 销售部门 Agent -->
-          <a :href="`${config.portalUrl}?from=home`" target="_blank" class="product-card card-purple">
+          <a :href="`${config.portalUrl}?from=home&agent=${encodeURIComponent('销售部门 Agent')}&theme=purple`" target="_blank" class="product-card card-purple">
             <div class="card-icon">
               <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
@@ -71,7 +71,7 @@ const toggleLocale = () => {
           </a>
 
           <!-- 采购部门 Agent -->
-          <a :href="`${config.portalUrl}?from=home`" target="_blank" class="product-card card-cyan">
+          <a :href="`${config.portalUrl}?from=home&agent=${encodeURIComponent('采购部门 Agent')}&theme=cyan`" target="_blank" class="product-card card-cyan">
             <div class="card-icon">
               <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/>
@@ -83,7 +83,7 @@ const toggleLocale = () => {
           </a>
 
           <!-- 行政部门 Agent -->
-          <a :href="`${config.portalUrl}?from=home`" target="_blank" class="product-card card-orange">
+          <a :href="`${config.portalUrl}?from=home&agent=${encodeURIComponent('行政部门 Agent')}&theme=orange`" target="_blank" class="product-card card-orange">
             <div class="card-icon">
               <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/>
@@ -95,7 +95,7 @@ const toggleLocale = () => {
           </a>
 
           <!-- 财务部门 Agent -->
-          <a :href="`${config.portalUrl}?from=home`" target="_blank" class="product-card card-green">
+          <a :href="`${config.portalUrl}?from=home&agent=${encodeURIComponent('财务部门 Agent')}&theme=green`" target="_blank" class="product-card card-green">
             <div class="card-icon">
               <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
@@ -107,7 +107,7 @@ const toggleLocale = () => {
           </a>
 
           <!-- 智能体自定义 -->
-          <a :href="`${config.portalUrl}?from=home`" target="_blank" class="product-card card-magenta">
+          <a :href="`${config.portalUrl}?from=home&agent=${encodeURIComponent('智能体自定义')}&theme=magenta`" target="_blank" class="product-card card-magenta">
             <div class="card-icon">
               <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"/>
@@ -119,7 +119,7 @@ const toggleLocale = () => {
           </a>
 
           <!-- 商业线索 Agent -->
-          <a :href="`${config.portalUrl}?from=home`" target="_blank" class="product-card card-red">
+          <a :href="`${config.portalUrl}?from=home&agent=${encodeURIComponent('商业线索 Agent')}&theme=red`" target="_blank" class="product-card card-red">
             <div class="card-icon">
               <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7"/>
@@ -130,17 +130,17 @@ const toggleLocale = () => {
             <span class="card-link">了解更多 →</span>
           </a>
 
-          <!-- 法务部门 Agent (待定) -->
-          <div class="product-card card-indigo card-coming">
+          <!-- 老板视角 -->
+          <a :href="`${config.portalUrl}?from=home&agent=${encodeURIComponent('老板视角')}&theme=indigo`" target="_blank" class="product-card card-indigo">
             <div class="card-icon">
               <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3"/>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
               </svg>
             </div>
-            <h3>法务部门 Agent</h3>
-            <p>合同审核分析 · 法律文书生成 · 合规风险预警</p>
-            <span class="card-link">敬请期待</span>
-          </div>
+            <h3>老板视角</h3>
+            <p>现金流与财务健康 · 增长与战略方向 · 人才与团队</p>
+            <span class="card-link">了解更多 →</span>
+          </a>
         </div>
       </div>
     </section>
@@ -401,15 +401,15 @@ html, body {
   border-color: #e5e7eb;
 }
 
-/* Card Colors - Icon Only */
-.card-blue .card-icon { background: linear-gradient(135deg, #3b82f6, #60a5fa); }
-.card-purple .card-icon { background: linear-gradient(135deg, #8b5cf6, #a78bfa); }
-.card-cyan .card-icon { background: linear-gradient(135deg, #06b6d4, #22d3ee); }
-.card-orange .card-icon { background: linear-gradient(135deg, #f97316, #fb923c); }
-.card-green .card-icon { background: linear-gradient(135deg, #22c55e, #4ade80); }
-.card-magenta .card-icon { background: linear-gradient(135deg, #ec4899, #f472b6); }
-.card-red .card-icon { background: linear-gradient(135deg, #ef4444, #f87171); }
-.card-indigo .card-icon { background: linear-gradient(135deg, #6366f1, #818cf8); }
+/* Card Colors - Icon with multi-color gradients */
+.card-blue .card-icon { background: linear-gradient(135deg, #60a5fa 0%, #93c5fd 50%, #c4b5fd 100%); }
+.card-purple .card-icon { background: linear-gradient(135deg, #a78bfa 0%, #c4b5fd 50%, #f9a8d4 100%); }
+.card-cyan .card-icon { background: linear-gradient(135deg, #0891b2 0%, #22d3ee 50%, #a5f3fc 100%); }
+.card-orange .card-icon { background: linear-gradient(135deg, #f97316 0%, #fbbf24 50%, #fde68a 100%); }
+.card-green .card-icon { background: linear-gradient(135deg, #22c55e 0%, #4ade80 50%, #86efac 100%); }
+.card-magenta .card-icon { background: linear-gradient(135deg, #ec4899 0%, #f472b6 50%, #fce7f3 100%); }
+.card-red .card-icon { background: linear-gradient(135deg, #ef4444 0%, #fca5a5 50%, #fef3c7 100%); }
+.card-indigo .card-icon { background: linear-gradient(135deg, #6366f1 0%, #a5b4fc 50%, #e0e7ff 100%); }
 
 .card-icon {
   width: 48px;
@@ -464,23 +464,11 @@ html, body {
 
 /* Coming Soon Cards */
 .card-coming {
-  cursor: default;
   opacity: 0.6;
 }
 
 .card-coming:hover {
-  transform: none;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-}
-
-.card-coming .card-link {
-  opacity: 0.5;
-  color: #9ca3af;
-}
-
-.card-coming:hover .card-link {
-  opacity: 0.5;
-  transform: translateY(4px);
+  opacity: 0.85;
 }
 
 /* Responsive */

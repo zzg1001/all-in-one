@@ -654,7 +654,7 @@ const clearConversation = () => {
   messages.value = [{
     id: Date.now(),
     type: 'agent',
-    content: '你好！我是 AI Agent，可以帮你编排和执行各种技能来完成复杂任务。试着告诉我你想做什么？',
+    content: `你好！我是 ${agentName.value}，可以帮你编排和执行各种技能来完成复杂任务。试着告诉我你想做什么？`,
     timestamp: new Date()
   }]
 
@@ -726,7 +726,7 @@ const loadSession = async (session: ChatSession) => {
       messages.value = [{
         id: Date.now(),
         type: 'agent',
-        content: '你好！我是 AI Agent，可以帮你编排和执行各种技能来完成复杂任务。试着告诉我你想做什么？',
+        content: `你好！我是 ${agentName.value}，可以帮你编排和执行各种技能来完成复杂任务。试着告诉我你想做什么？`,
         timestamp: new Date()
       }]
     }
@@ -1250,6 +1250,96 @@ watch(() => route.path, () => {
 
 // 从首页跳转时显示返回按钮
 const showBackHome = computed(() => route.query.from === 'home')
+
+// 从URL获取Agent名称（首页跳转时带入）
+const agentName = computed(() => {
+  const name = route.query.agent as string
+  return name ? decodeURIComponent(name) : 'AI Agent'
+})
+
+// 从URL获取主题色
+const agentTheme = computed(() => {
+  return (route.query.theme as string) || 'default'
+})
+
+// 主题色配置 - 更淡雅、更丰富的配色
+const themeColors = {
+  default: {
+    primary: '#6366f1',
+    primaryLight: '#a5b4fc',
+    secondary: '#f0abfc',
+    primaryBg: 'rgba(99, 102, 241, 0.08)',
+    gradient: 'linear-gradient(135deg, #667eea 0%, #a5b4fc 50%, #f0abfc 100%)'
+  },
+  blue: {
+    primary: '#60a5fa',
+    primaryLight: '#93c5fd',
+    secondary: '#c4b5fd',
+    primaryBg: 'rgba(96, 165, 250, 0.08)',
+    gradient: 'linear-gradient(135deg, #60a5fa 0%, #93c5fd 50%, #c4b5fd 100%)'
+  },
+  purple: {
+    primary: '#a78bfa',
+    primaryLight: '#c4b5fd',
+    secondary: '#f9a8d4',
+    primaryBg: 'rgba(167, 139, 250, 0.08)',
+    gradient: 'linear-gradient(135deg, #a78bfa 0%, #c4b5fd 50%, #f9a8d4 100%)'
+  },
+  cyan: {
+    primary: '#22d3ee',
+    primaryLight: '#67e8f9',
+    secondary: '#a5f3fc',
+    primaryBg: 'rgba(34, 211, 238, 0.08)',
+    gradient: 'linear-gradient(135deg, #0891b2 0%, #22d3ee 50%, #a5f3fc 100%)'
+  },
+  orange: {
+    primary: '#fb923c',
+    primaryLight: '#fdba74',
+    secondary: '#fcd34d',
+    primaryBg: 'rgba(251, 146, 60, 0.08)',
+    gradient: 'linear-gradient(135deg, #f97316 0%, #fbbf24 50%, #fde68a 100%)'
+  },
+  green: {
+    primary: '#4ade80',
+    primaryLight: '#86efac',
+    secondary: '#67e8f9',
+    primaryBg: 'rgba(74, 222, 128, 0.08)',
+    gradient: 'linear-gradient(135deg, #22c55e 0%, #4ade80 50%, #86efac 100%)'
+  },
+  magenta: {
+    primary: '#f472b6',
+    primaryLight: '#f9a8d4',
+    secondary: '#c4b5fd',
+    primaryBg: 'rgba(244, 114, 182, 0.08)',
+    gradient: 'linear-gradient(135deg, #ec4899 0%, #f472b6 50%, #fce7f3 100%)'
+  },
+  red: {
+    primary: '#f87171',
+    primaryLight: '#fca5a5',
+    secondary: '#fdba74',
+    primaryBg: 'rgba(248, 113, 113, 0.08)',
+    gradient: 'linear-gradient(135deg, #ef4444 0%, #fca5a5 50%, #fef3c7 100%)'
+  },
+  indigo: {
+    primary: '#818cf8',
+    primaryLight: '#a5b4fc',
+    secondary: '#c4b5fd',
+    primaryBg: 'rgba(129, 140, 248, 0.08)',
+    gradient: 'linear-gradient(135deg, #6366f1 0%, #a5b4fc 50%, #e0e7ff 100%)'
+  }
+}
+
+// 当前主题色
+const currentThemeColors = computed(() => {
+  return themeColors[agentTheme.value as keyof typeof themeColors] || themeColors.default
+})
+
+// 监听agentName变化，更新欢迎消息
+watch(agentName, (newName) => {
+  if (messages.value.length > 0 && messages.value[0].type === 'agent') {
+    messages.value[0].content = `你好！我是 ${newName}，可以帮你编排和执行各种技能来完成复杂任务。试着告诉我你想做什么？`
+  }
+}, { immediate: true })
 
 // 右侧技能面板相关状态
 interface SkillPanelMessage {
@@ -5359,7 +5449,17 @@ const openInNewTab = (url: string) => {
 </script>
 
 <template>
-  <div class="agent-chat">
+  <div
+    class="agent-chat"
+    :class="`theme-${agentTheme}`"
+    :style="{
+      '--theme-primary': currentThemeColors.primary,
+      '--theme-primary-light': currentThemeColors.primaryLight,
+      '--theme-secondary': currentThemeColors.secondary,
+      '--theme-primary-bg': currentThemeColors.primaryBg,
+      '--theme-gradient': currentThemeColors.gradient
+    }"
+  >
     <!-- 聊天头部 -->
     <header class="chat-header">
       <div class="header-left">
@@ -5372,7 +5472,7 @@ const openInNewTab = (url: string) => {
           <span class="status-dot"></span>
         </div>
         <div class="agent-info">
-          <h3>AI Agent</h3>
+          <h3>{{ agentName }}</h3>
           <span class="agent-status">在线 · 随时为您服务</span>
         </div>
       </div>
@@ -6613,12 +6713,17 @@ const openInNewTab = (url: string) => {
   overflow: hidden;
   border: 1px solid #e5e7eb;
   box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  --theme-primary: #818cf8;
+  --theme-primary-light: #a5b4fc;
+  --theme-secondary: #f0abfc;
+  --theme-primary-bg: rgba(99, 102, 241, 0.08);
+  --theme-gradient: linear-gradient(135deg, #667eea 0%, #a5b4fc 50%, #f0abfc 100%);
 }
 
 /* Header */
 .chat-header {
   padding: 14px 20px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--theme-gradient);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -6678,7 +6783,7 @@ const openInNewTab = (url: string) => {
   width: 10px;
   height: 10px;
   background: #10b981;
-  border: 2px solid #667eea;
+  border: 2px solid var(--theme-primary-light);
   border-radius: 50%;
   animation: pulse 2s infinite;
 }
@@ -6839,7 +6944,7 @@ const openInNewTab = (url: string) => {
 .step-counter {
   font-size: 9px;
   font-weight: 600;
-  color: #6366f1;
+  color: var(--theme-primary);
   background: #eef2ff;
   padding: 2px 6px;
   border-radius: 10px;
@@ -6870,7 +6975,7 @@ const openInNewTab = (url: string) => {
 }
 
 .collapse-all-btn:hover {
-  color: #6366f1;
+  color: var(--theme-primary);
   background: rgba(99, 102, 241, 0.1);
 }
 
@@ -6907,8 +7012,8 @@ const openInNewTab = (url: string) => {
 
 /* 选中状态 */
 .pipeline-group.is-active {
-  border-color: #6366f1;
-  border-left: 3px solid #6366f1;
+  border-color: var(--theme-primary);
+  border-left: 3px solid var(--theme-primary);
   background: linear-gradient(135deg, rgba(99, 102, 241, 0.04) 0%, rgba(139, 92, 246, 0.04) 100%);
   box-shadow: 0 2px 8px rgba(99, 102, 241, 0.12);
 }
@@ -6923,11 +7028,11 @@ const openInNewTab = (url: string) => {
 }
 
 .pipeline-group.is-active .group-expand-icon {
-  color: #6366f1;
+  color: var(--theme-primary);
 }
 
 .pipeline-group.is-active .group-progress {
-  color: #6366f1;
+  color: var(--theme-primary);
 }
 
 /* 流程组头部 */
@@ -6958,7 +7063,7 @@ const openInNewTab = (url: string) => {
 }
 
 .pipeline-group.is-expanded .group-expand-icon {
-  color: #6366f1;
+  color: var(--theme-primary);
 }
 
 .group-info {
@@ -6992,7 +7097,7 @@ const openInNewTab = (url: string) => {
 }
 
 .group-progress.progress-running {
-  color: #6366f1;
+  color: var(--theme-primary);
 }
 
 .group-progress.progress-paused {
@@ -7063,7 +7168,7 @@ const openInNewTab = (url: string) => {
 .star-surface svg {
   width: 12px;
   height: 12px;
-  color: #6366f1;
+  color: var(--theme-primary);
   transition: all 0.3s ease;
   filter: drop-shadow(0 1px 1px rgba(99, 102, 241, 0.2));
 }
@@ -7146,7 +7251,7 @@ const openInNewTab = (url: string) => {
   width: 8px;
   height: 8px;
   border: 1.5px solid rgba(99, 102, 241, 0.2);
-  border-top-color: #6366f1;
+  border-top-color: var(--theme-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -7326,7 +7431,7 @@ const openInNewTab = (url: string) => {
 .save-icon {
   width: 16px;
   height: 16px;
-  color: #6366f1;
+  color: var(--theme-primary);
   transition: all 0.3s ease;
   filter: drop-shadow(0 1px 1px rgba(99, 102, 241, 0.2));
 }
@@ -7512,7 +7617,7 @@ const openInNewTab = (url: string) => {
 }
 
 .node-label.label-running {
-  color: #6366f1;
+  color: var(--theme-primary);
   font-weight: 600;
 }
 
@@ -7646,7 +7751,7 @@ const openInNewTab = (url: string) => {
 .skill-input-dialog .dialog-skill-name {
   font-size: 14px;
   font-weight: 600;
-  color: #6366f1;
+  color: var(--theme-primary);
   margin: -8px 0 8px;
 }
 
@@ -7664,7 +7769,7 @@ const openInNewTab = (url: string) => {
 
 .pipeline-node.node-running {
   background: linear-gradient(135deg, rgba(99,102,241,0.1) 0%, rgba(139,92,246,0.1) 100%);
-  border-color: #6366f1;
+  border-color: var(--theme-primary);
   box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1), 0 2px 8px rgba(99, 102, 241, 0.15);
 }
 
@@ -7709,7 +7814,7 @@ const openInNewTab = (url: string) => {
 .node-pulse {
   position: absolute;
   inset: -4px;
-  border: 2px solid #6366f1;
+  border: 2px solid var(--theme-primary);
   border-radius: 12px;
   animation: nodePulse 1.5s ease-out infinite;
 }
@@ -7837,7 +7942,7 @@ const openInNewTab = (url: string) => {
 }
 
 .message-user .message-content {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--theme-gradient);
   color: #fff;
   border-radius: 16px 16px 4px 16px;
   max-width: 70%;
@@ -7872,7 +7977,7 @@ const openInNewTab = (url: string) => {
 .agent-msg-avatar {
   width: 32px;
   height: 32px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--theme-gradient);
   border-radius: 8px;
   display: flex;
   align-items: center;
@@ -7974,11 +8079,11 @@ const openInNewTab = (url: string) => {
   content: '•';
   position: absolute;
   left: -8px;
-  color: #6366f1;
+  color: var(--theme-primary);
 }
 
 .markdown-content a {
-  color: #6366f1;
+  color: var(--theme-primary);
   text-decoration: none;
 }
 
@@ -7992,7 +8097,7 @@ const openInNewTab = (url: string) => {
   display: inline-block;
   width: 2px;
   height: 14px;
-  background: #6366f1;
+  background: var(--theme-primary);
   margin-left: 2px;
   animation: blink 0.8s infinite;
   vertical-align: text-bottom;
@@ -8033,7 +8138,7 @@ const openInNewTab = (url: string) => {
 .pipeline-title {
   font-size: 11px;
   font-weight: 600;
-  color: #6366f1;
+  color: var(--theme-primary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -8064,7 +8169,7 @@ const openInNewTab = (url: string) => {
 }
 
 .pipeline-step.status-running .connector-line {
-  background: #6366f1;
+  background: var(--theme-primary);
 }
 
 .step-node {
@@ -8121,7 +8226,7 @@ const openInNewTab = (url: string) => {
 
 .step-node.clickable:hover {
   background: linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(139, 92, 246, 0.05) 100%);
-  border-color: #818cf8;
+  border-color: var(--theme-primary-light);
   transform: translateY(-1px);
 }
 
@@ -8131,7 +8236,7 @@ const openInNewTab = (url: string) => {
 }
 
 .step-node.needs-input {
-  border-color: #6366f1;
+  border-color: var(--theme-primary);
   background: linear-gradient(135deg, rgba(99, 102, 241, 0.03) 0%, rgba(139, 92, 246, 0.03) 100%);
   animation: needsInputPulse 2s ease-in-out infinite;
 }
@@ -8155,7 +8260,7 @@ const openInNewTab = (url: string) => {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  background: var(--theme-gradient);
   color: #fff;
   padding: 4px 10px;
   font-weight: 500;
@@ -8168,7 +8273,7 @@ const openInNewTab = (url: string) => {
 
 .pipeline-step.status-running .step-node {
   background: rgba(99, 102, 241, 0.05);
-  border-color: #6366f1;
+  border-color: var(--theme-primary);
   box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
 }
 
@@ -8192,7 +8297,7 @@ const openInNewTab = (url: string) => {
 }
 
 .pipeline-step.status-running .step-number {
-  background: #6366f1;
+  background: var(--theme-primary);
   color: #fff;
 }
 
@@ -8294,7 +8399,7 @@ const openInNewTab = (url: string) => {
 
 .status-badge.running {
   background: rgba(99, 102, 241, 0.1);
-  color: #6366f1;
+  color: var(--theme-primary);
 }
 
 .status-badge.running.pausable {
@@ -8336,7 +8441,7 @@ const openInNewTab = (url: string) => {
   padding: 3px 8px;
   font-size: 10px;
   background: rgba(99, 102, 241, 0.1);
-  color: #6366f1;
+  color: var(--theme-primary);
   border: 1px solid rgba(99, 102, 241, 0.3);
   border-radius: 4px;
   cursor: pointer;
@@ -8345,7 +8450,7 @@ const openInNewTab = (url: string) => {
 
 .paused-edit-btn:hover {
   background: rgba(99, 102, 241, 0.2);
-  border-color: #6366f1;
+  border-color: var(--theme-primary);
 }
 
 .paused-edit-btn svg {
@@ -8360,7 +8465,7 @@ const openInNewTab = (url: string) => {
 
 .status-badge.configuring {
   background: rgba(99, 102, 241, 0.15);
-  color: #6366f1;
+  color: var(--theme-primary);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -8369,7 +8474,7 @@ const openInNewTab = (url: string) => {
 .config-pulse {
   width: 8px;
   height: 8px;
-  background: #6366f1;
+  background: var(--theme-primary);
   border-radius: 50%;
   animation: configPulse 1.5s ease-in-out infinite;
 }
@@ -8407,7 +8512,7 @@ const openInNewTab = (url: string) => {
 
 .step-node:hover .status-badge.completed.rerunnable {
   background: rgba(99, 102, 241, 0.15);
-  color: #6366f1;
+  color: var(--theme-primary);
 }
 
 .step-node:hover .status-badge.completed .completed-text {
@@ -8613,7 +8718,7 @@ const openInNewTab = (url: string) => {
 }
 
 .mini-action-btn.create-btn {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--theme-gradient);
   color: #fff;
 }
 
@@ -8636,7 +8741,7 @@ const openInNewTab = (url: string) => {
   width: 10px;
   height: 10px;
   border: 2px solid rgba(99, 102, 241, 0.2);
-  border-top-color: #6366f1;
+  border-top-color: var(--theme-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -8898,7 +9003,7 @@ const openInNewTab = (url: string) => {
 .typing-indicator span {
   width: 6px;
   height: 6px;
-  background: #6366f1;
+  background: var(--theme-primary);
   border-radius: 50%;
   animation: typing 1.4s infinite ease-in-out;
 }
@@ -8943,7 +9048,7 @@ const openInNewTab = (url: string) => {
 }
 
 .input-wrapper:focus-within {
-  border-color: #6366f1;
+  border-color: var(--theme-primary);
   box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
   background: #fff;
 }
@@ -9017,7 +9122,7 @@ const openInNewTab = (url: string) => {
 .send-btn {
   width: 38px;
   height: 38px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--theme-gradient);
   border: none;
   border-radius: 10px;
   cursor: pointer;
@@ -9192,7 +9297,7 @@ const openInNewTab = (url: string) => {
 }
 
 .dialog-btn.confirm {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--theme-gradient);
   border: none;
   color: #fff;
 }
@@ -9267,7 +9372,7 @@ const openInNewTab = (url: string) => {
 
 .context-textarea:focus {
   outline: none;
-  border-color: #6366f1;
+  border-color: var(--theme-primary);
   box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
   background: #fff;
 }
@@ -9321,7 +9426,7 @@ const openInNewTab = (url: string) => {
 .form-input:focus,
 .form-textarea:focus {
   outline: none;
-  border-color: #6366f1;
+  border-color: var(--theme-primary);
   box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
   background: #fff;
 }
@@ -9394,7 +9499,7 @@ const openInNewTab = (url: string) => {
 
 .input-wrapper .upload-btn:hover {
   background: #f3f4f6;
-  color: #6366f1;
+  color: var(--theme-primary);
 }
 
 .input-wrapper .upload-btn:disabled {
@@ -10568,7 +10673,7 @@ const openInNewTab = (url: string) => {
   width: 32px;
   height: 32px;
   border: 3px solid #e5e7eb;
-  border-top-color: #6366f1;
+  border-top-color: var(--theme-primary);
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
@@ -10784,7 +10889,7 @@ const openInNewTab = (url: string) => {
 }
 
 .markdown-content blockquote {
-  border-left: 4px solid #6366f1;
+  border-left: 4px solid var(--theme-primary);
   padding-left: 1em;
   margin: 1em 0;
   color: #6b7280;
@@ -10986,7 +11091,7 @@ const openInNewTab = (url: string) => {
 .download-btn {
   margin-top: 8px;
   padding: 8px 20px;
-  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  background: var(--theme-gradient);
   border: none;
   border-radius: 8px;
   color: #fff;

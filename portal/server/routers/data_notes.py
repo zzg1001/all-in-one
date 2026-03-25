@@ -284,6 +284,41 @@ async def create_folder(
     if level >= MAX_FOLDER_LEVEL:
         raise HTTPException(status_code=400, detail=f"最多支持 {MAX_FOLDER_LEVEL} 层文件夹")
 
+    # 检查是否已存在同名文件夹（防止重复创建）
+    existing_query = db.query(DataNote).filter(
+        DataNote.user_id == user_id,
+        DataNote.name == data.name,
+        DataNote.file_type == 'folder'
+    )
+    if data.parent_id:
+        existing_query = existing_query.filter(DataNote.parent_id == data.parent_id)
+    else:
+        existing_query = existing_query.filter(DataNote.parent_id.is_(None))
+    existing = existing_query.first()
+
+    if existing:
+        # 已存在，直接返回
+        item_count = db.query(sql_func.count(DataNote.id)).filter(
+            DataNote.user_id == user_id,
+            DataNote.parent_id == existing.id
+        ).scalar()
+        return DataNoteResponse(
+            id=existing.id,
+            user_id=existing.user_id,
+            name=existing.name,
+            description=existing.description,
+            file_type=existing.file_type,
+            file_url=existing.file_url,
+            file_size=existing.file_size,
+            source_skill=existing.source_skill,
+            is_favorited=existing.is_favorited,
+            parent_id=existing.parent_id,
+            level=existing.level,
+            item_count=item_count,
+            created_at=existing.created_at,
+            updated_at=existing.updated_at
+        )
+
     # 创建文件夹
     folder = DataNote(
         id=str(uuid.uuid4()),
