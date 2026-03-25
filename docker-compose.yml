@@ -1,0 +1,100 @@
+version: '3.8'
+
+services:
+  # ========== Portal (用户端) ==========
+  portal-web:
+    build:
+      context: ./portal/web
+      dockerfile: Dockerfile
+    ports:
+      - "5173:80"
+    depends_on:
+      - portal-api
+    environment:
+      - VITE_API_BASE_URL=${PORTAL_API_URL:-http://localhost:8000/api}
+    networks:
+      - app-network
+
+  portal-api:
+    build:
+      context: ./portal/server
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mysql
+    env_file:
+      - ./portal/server/.env
+    volumes:
+      - ./portal/server/skills_storage:/app/skills_storage
+      - ./portal/server/outputs:/app/outputs
+      - ./portal/server/uploads:/app/uploads
+    networks:
+      - app-network
+
+  # ========== Admin (管理端) ==========
+  admin-web:
+    build:
+      context: ./admin/web
+      dockerfile: Dockerfile
+    ports:
+      - "5174:80"
+    depends_on:
+      - admin-api
+    environment:
+      - VITE_API_BASE_URL=${ADMIN_API_URL:-http://localhost:8001/api}
+    networks:
+      - app-network
+
+  admin-api:
+    build:
+      context: ./admin/server
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8000"
+    depends_on:
+      - mysql
+    env_file:
+      - ./admin/server/.env
+    networks:
+      - app-network
+
+  # ========== 数据库 ==========
+  mysql:
+    image: mysql:8.0
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root123456}
+      MYSQL_DATABASE: ${DB_NAME:-product_background}
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./portal/server/schema.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - app-network
+
+  # ========== Nginx 网关 (可选) ==========
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    depends_on:
+      - portal-web
+      - portal-api
+      - admin-web
+      - admin-api
+    networks:
+      - app-network
+    profiles:
+      - gateway
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  mysql-data:

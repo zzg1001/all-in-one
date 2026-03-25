@@ -1,0 +1,47 @@
+# 生产环境 Docker Compose
+# 域名: infortest.ike-data.com
+# 架构: 宿主机 Nginx (80) + Docker API 容器
+# 数据库: 外部 MySQL (8.153.198.194:63306)
+#
+# 配置目录: /data/ai-platform/config/
+#   - portal.env   Portal 配置
+#   - admin.env    Admin 配置
+
+version: '3.8'
+
+services:
+  # ========== Portal API (用户端后端) ==========
+  portal-api:
+    build:
+      context: ./portal/server
+      dockerfile: Dockerfile
+    container_name: portal-api
+    restart: always
+    ports:
+      - "8000:8000"
+    env_file:
+      - /data/ai-platform/config/portal.env
+    volumes:
+      - /data/ai-platform/skills_storage:/app/skills_storage
+      - /data/ai-platform/outputs:/app/outputs
+      - /data/ai-platform/uploads:/app/uploads
+    networks:
+      - app-network
+
+  # ========== Admin API (管理端后端) ==========
+  admin-api:
+    build:
+      context: ./admin/server
+      dockerfile: Dockerfile
+    container_name: admin-api
+    restart: always
+    ports:
+      - "8001:8000"
+    env_file:
+      - /data/ai-platform/config/admin.env
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge

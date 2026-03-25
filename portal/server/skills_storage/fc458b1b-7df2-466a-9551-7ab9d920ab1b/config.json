@@ -1,0 +1,12 @@
+{
+  "name": "json-to-excel",
+  "description": "将 JSON 文件转换为 Excel 格式(.xlsx)。输入：JSON文件，输出：Excel表格",
+  "icon": "⚡",
+  "tags": ["转换", "数据处理"],
+  "author": null,
+  "version": "1.0.0",
+  "entry_script": "main.py",
+  "type": "python",
+  "exec_mode": "direct",
+  "output_config": null
+}

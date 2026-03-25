@@ -1,0 +1,42 @@
+# Windows special files
+nul
+NUL
+
+# Node modules
+node_modules/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Build outputs
+dist/
+build/
+
+# Environment files
+.env
+.env.*
+.env.local
+.env.development
+.env.production
+*.env
+
+# Logs
+*.log
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Temp files
+temp_*.json
+insert_config.py
+req

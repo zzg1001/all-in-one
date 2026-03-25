@@ -1,0 +1,136 @@
+# ============================================================
+# AI Skills Platform - Nginx 生产环境配置模板
+# ============================================================
+# 使用说明：
+# 1. 复制此文件为 default.conf
+# 2. 修改 server_name 为实际域名
+# 3. 配置 SSL 证书路径
+# 4. 根据实际部署调整 proxy_pass 地址
+# ============================================================
+
+# HTTP -> HTTPS 重定向
+server {
+    listen 80;
+    server_name your-domain.com www.your-domain.com;  # [必改] 实际域名
+    return 301 https://$server_name$request_uri;
+}
+
+# HTTPS 主配置
+server {
+    listen 443 ssl http2;
+    server_name your-domain.com www.your-domain.com;  # [必改] 实际域名
+
+    # ---------- SSL 证书 [必改] ----------
+    ssl_certificate /etc/nginx/ssl/your-domain.com.pem;
+    ssl_certificate_key /etc/nginx/ssl/your-domain.com.key;
+
+    # SSL 安全配置
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256;
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+
+    # ---------- 安全头 ----------
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    # ---------- Gzip 压缩 ----------
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css text/xml text/javascript application/javascript application/json application/xml;
+
+    # ---------- 首页 ----------
+    location / {
+        root /var/www/frontend-home/dist;
+        index index.html;
+        try_files $uri $uri/ /index.html;
+
+        # 静态资源缓存
+        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2)$ {
+            expires 30d;
+            add_header Cache-Control "public, immutable";
+        }
+    }
+
+    # ---------- Portal 用户端前端 ----------
+    location /portal/ {
+        alias /var/www/portal/web/dist/;
+        index index.html;
+        try_files $uri $uri/ /portal/index.html;
+    }
+
+    # ---------- Admin 管理端前端 ----------
+    location /admin/ {
+        alias /var/www/admin/web/dist/;
+        index index.html;
+        try_files $uri $uri/ /admin/index.html;
+
+        # 可选：IP 白名单限制管理后台
+        # allow 192.168.1.0/24;
+        # deny all;
+    }
+
+    # ---------- Portal API ----------
+    location /portal-api/ {
+        proxy_pass http://127.0.0.1:8000/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # SSE 流式响应支持
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+
+        # WebSocket 支持（如需要）
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+
+    # ---------- Admin API ----------
+    location /admin-api/ {
+        proxy_pass http://127.0.0.1:8001/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_read_timeout 60s;
+    }
+
+    # ---------- 静态文件输出 ----------
+    location /outputs/ {
+        proxy_pass http://127.0.0.1:8000/outputs/;
+        proxy_set_header Host $host;
+
+        # 文件下载优化
+        proxy_buffering on;
+        proxy_buffer_size 128k;
+        proxy_buffers 4 256k;
+    }
+
+    # ---------- 上传文件（如需直接访问）----------
+    location /uploads/ {
+        proxy_pass http://127.0.0.1:8000/uploads/;
+        proxy_set_header Host $host;
+    }
+
+    # ---------- 健康检查 ----------
+    location /health {
+        proxy_pass http://127.0.0.1:8000/health;
+        access_log off;
+    }
+
+    # ---------- 错误页面 ----------
+    error_page 500 502 503 504 /50x.html;
+    location = /50x.html {
+        root /usr/share/nginx/html;
+    }
+}

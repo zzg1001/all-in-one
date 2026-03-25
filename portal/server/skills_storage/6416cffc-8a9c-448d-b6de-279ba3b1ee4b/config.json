@@ -1,0 +1,14 @@
+{
+  "name": "hello-world",
+  "description": "一个简单的示例技能，返回问候信息",
+  "icon": "👋",
+  "tags": [
+    "示例",
+    "模板"
+  ],
+  "author": null,
+  "version": "1.0.0",
+  "entry_script": "main.py",
+  "type": "python",
+  "output_config": null
+}
