@@ -26,12 +26,14 @@ TEMP_SKILLS_STORAGE_DIR = get_skills_storage_temp_dir()
 @router.get("", response_model=List[SkillResponse])
 async def get_skills(
     q: Optional[str] = None,
+    dept: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
     """获取所有当前版本的技能（status=active）
 
     Args:
         q: 搜索关键词（搜索名称和描述）
+        dept: 部门名称，过滤包含 "dept:{部门名}" 或 "public" 标签的技能
     """
     query = db.query(Skill).filter(Skill.status == "active")
 
@@ -44,6 +46,15 @@ async def get_skills(
         )
 
     skills = query.order_by(Skill.original_created_at.asc()).all()
+
+    # 部门过滤：仅返回包含 "dept:{部门名}" 或 "public" 标签的技能
+    if dept and dept.strip():
+        dept_tag = f"dept:{dept.strip()}"
+        skills = [
+            s for s in skills
+            if s.tags and (dept_tag in s.tags or "public" in s.tags)
+        ]
+
     return skills
 
 

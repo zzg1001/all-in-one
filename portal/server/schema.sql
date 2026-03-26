@@ -87,6 +87,7 @@ CREATE TABLE `workflow_executions` (
 CREATE TABLE `user_data_notes` (
     `id` VARCHAR(50) NOT NULL COMMENT '便签ID (UUID)',
     `user_id` VARCHAR(50) NOT NULL COMMENT '用户ID',
+    `agent_id` VARCHAR(36) COMMENT '关联的Agent ID（用于数据隔离）',
     `name` VARCHAR(100) NOT NULL COMMENT '便签名称',
     `description` TEXT COMMENT '描述',
     `file_type` VARCHAR(20) NOT NULL COMMENT '文件类型 (xlsx, pdf, json, folder等)',
@@ -100,6 +101,30 @@ CREATE TABLE `user_data_notes` (
     `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     PRIMARY KEY (`id`),
     INDEX `idx_data_notes_user_id` (`user_id`),
+    INDEX `idx_data_notes_agent_id` (`agent_id`),
     INDEX `idx_data_notes_parent_id` (`parent_id`),
     INDEX `idx_data_notes_favorited` (`user_id`, `is_favorited`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户数据便签表';
+
+
+CREATE TABLE `agents` (
+  `id` varchar(36) COLLATE utf8mb4_general_ci NOT NULL,
+  `name` varchar(100) COLLATE utf8mb4_general_ci NOT NULL,
+  `description` text COLLATE utf8mb4_general_ci,
+  `icon` varchar(50) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `category` varchar(50) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `system_prompt` text COLLATE utf8mb4_general_ci,
+  `model` varchar(100) COLLATE utf8mb4_general_ci NOT NULL,
+  `temperature` float NOT NULL,
+  `max_tokens` int NOT NULL,
+  `tools` json DEFAULT NULL,
+  `skills` json DEFAULT NULL,
+  `module_configs` json DEFAULT NULL,
+  `status` varchar(20) COLLATE utf8mb4_general_ci NOT NULL,
+  `author` varchar(100) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `version` varchar(20) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `usage_count` int NOT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;

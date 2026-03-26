@@ -19,7 +19,7 @@ from modules import (
     registry,
 )
 
-router = APIRouter(prefix="/modules", tags=["modules"])
+router = APIRouter(prefix="/api/modules", tags=["modules"])
 
 
 # ============ Pydantic 模型 ============

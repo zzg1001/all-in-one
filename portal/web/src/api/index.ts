@@ -126,10 +126,13 @@ export interface SkillUploadData {
 }
 
 export const skillsApi = {
-  // Get all skills (with optional search)
-  getAll: (search?: string) => {
-    const params = search ? `?q=${encodeURIComponent(search)}` : ''
-    return request<Skill[]>(`/skills${params}`)
+  // Get all skills (with optional search and department filter)
+  getAll: (options?: { search?: string; dept?: string }) => {
+    const params = new URLSearchParams()
+    if (options?.search) params.append('q', options.search)
+    if (options?.dept) params.append('dept', options.dept)
+    const queryString = params.toString()
+    return request<Skill[]>(`/skills${queryString ? `?${queryString}` : ''}`)
   },
 
   // Get single skill
@@ -1168,6 +1171,7 @@ export const executionsApi = {
 export interface DataNote {
   id: string
   user_id: string
+  agent_id: string | null  // 关联的 Agent ID
   name: string
   description: string | null
   file_type: string  // 'folder' 表示文件夹
@@ -1190,6 +1194,7 @@ export interface DataNoteCreate {
   file_size?: string
   source_skill?: string
   parent_id?: string
+  agent_id?: string  // 关联的 Agent ID
 }
 
 export interface DataNoteUpdate {
@@ -1207,13 +1212,14 @@ export interface FolderCreate {
 
 export const dataNotesApi = {
   // 获取便签列表
-  getAll: (options?: { search?: string; favoritedOnly?: boolean; parentId?: string | null }) => {
+  getAll: (options?: { search?: string; favoritedOnly?: boolean; parentId?: string | null; agentId?: string }) => {
     const params = new URLSearchParams()
     if (options?.search) params.append('q', options.search)
     if (options?.favoritedOnly) params.append('favorited_only', 'true')
     if (options?.parentId !== undefined) {
       params.append('parent_id', options.parentId || '')
     }
+    if (options?.agentId) params.append('agent_id', options.agentId)
     const query = params.toString()
     return request<DataNote[]>(`/data-notes${query ? '?' + query : ''}`, {
       headers: { 'X-User-ID': getUserId() }
@@ -1458,6 +1464,9 @@ export const agentsApi = {
 
   // 获取单个 Agent
   getById: (id: string) => request<Agent>(`/agents/${id}`),
+
+  // 根据名称获取 Agent
+  getByName: (name: string) => request<Agent>(`/agents/by-name/${encodeURIComponent(name)}`),
 
   // 创建 Agent
   create: (data: AgentCreate) =>

@@ -26,6 +26,7 @@ const toggleLocale = () => {
           <nav class="nav">
             <ul class="nav-links">
               <li><a href="#products" class="active">{{ $t('header.products') }}</a></li>
+              <li><a :href="`${config.portalUrl}/agents`" target="_blank">{{ $t('header.manage') }}</a></li>
             </ul>
           </nav>
 

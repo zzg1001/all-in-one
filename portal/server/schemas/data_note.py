@@ -15,6 +15,7 @@ class DataNoteBase(BaseModel):
 class DataNoteCreate(DataNoteBase):
     """创建数据便签"""
     parent_id: Optional[str] = None
+    agent_id: Optional[str] = None  # 关联的 Agent ID
 
 
 class DataNoteUpdate(BaseModel):
@@ -30,6 +31,7 @@ class FolderCreate(BaseModel):
     name: str = Field(..., max_length=100)
     parent_id: Optional[str] = None
     item_ids: List[str] = []  # 要移入文件夹的文件ID
+    agent_id: Optional[str] = None  # 关联的 Agent ID
 
 
 class MoveToFolder(BaseModel):
@@ -41,6 +43,7 @@ class DataNoteResponse(BaseModel):
     """数据便签响应"""
     id: str
     user_id: str
+    agent_id: Optional[str] = None  # 关联的 Agent ID
     name: str
     description: Optional[str] = None
     file_type: str

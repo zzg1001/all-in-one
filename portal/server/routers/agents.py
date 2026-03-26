@@ -13,7 +13,7 @@ import uuid
 from database import get_db
 from models.agent import Agent as AgentModel
 
-router = APIRouter(prefix="/agents", tags=["agents"])
+router = APIRouter(prefix="/api/agents", tags=["agents"])
 
 
 # ============ Pydantic 模型 ============
@@ -112,21 +112,27 @@ def _db_to_response(db_agent: AgentModel) -> Agent:
 
 
 def _init_sample_agents(db: Session):
-    """初始化示例数据（如果数据库为空）"""
-    existing = db.query(AgentModel).first()
-    if existing:
+    """初始化示例数据（与首页 8 个 Agent 一致）"""
+    # 检查是否已有预设 Agent（通过名称判断）
+    preset_names = ["HR部门 Agent", "销售部门 Agent", "采购部门 Agent", "行政部门 Agent",
+                    "财务部门 Agent", "智能体自定义", "商业线索 Agent", "老板视角"]
+    existing_names = [a.name for a in db.query(AgentModel.name).all()]
+
+    # 如果所有预设 Agent 都存在，跳过初始化
+    if all(name in existing_names for name in preset_names):
         return
 
+    # 8 个预设 Agent（与首页一致）
     samples = [
         {
             "id": str(uuid.uuid4()),
-            "name": "智能写作助手",
-            "description": "帮助撰写各类文档、邮件、报告，支持多种风格和格式",
-            "icon": "✍️",
-            "category": "通用助手",
-            "system_prompt": "你是一个专业的写作助手...",
+            "name": "HR部门 Agent",
+            "description": "人事数据分析 · 入离职流程自动化 · 招聘文案生成",
+            "icon": "👥",
+            "category": "企业服务",
+            "system_prompt": "你是HR部门的智能助手，帮助处理人事数据分析、入离职流程自动化、招聘文案生成等工作。",
             "model": "claude-opus-4-5",
-            "tools": ["write", "read"],
+            "tools": ["read", "write"],
             "skills": [],
             "status": "active",
             "author": "System",
@@ -135,47 +141,124 @@ def _init_sample_agents(db: Session):
         },
         {
             "id": str(uuid.uuid4()),
-            "name": "数据分析专家",
-            "description": "分析 Excel、CSV 数据，生成可视化图表和分析报告",
-            "icon": "📊",
-            "category": "数据处理",
-            "system_prompt": "你是一个数据分析专家...",
+            "name": "销售部门 Agent",
+            "description": "销售数据分析 · 客户管理自动化 · 销售物料生成",
+            "icon": "📈",
+            "category": "企业服务",
+            "system_prompt": "你是销售部门的智能助手，帮助处理销售数据分析、客户管理自动化、销售物料生成等工作。",
             "model": "claude-opus-4-5",
-            "tools": ["read", "code_exec"],
-            "skills": ["excel-to-json", "json-to-excel"],
+            "tools": ["read", "write", "code_exec"],
+            "skills": [],
             "status": "active",
             "author": "System",
-            "version": "1.2.0",
+            "version": "1.0.0",
             "usage_count": 892,
         },
         {
             "id": str(uuid.uuid4()),
-            "name": "代码生成器",
-            "description": "根据需求描述生成代码，支持多种编程语言",
-            "icon": "💻",
-            "category": "代码生成",
-            "system_prompt": "你是一个代码生成专家...",
+            "name": "采购部门 Agent",
+            "description": "采购成本分析 · 采购流程自动化 · 供应商管理",
+            "icon": "🛒",
+            "category": "企业服务",
+            "system_prompt": "你是采购部门的智能助手，帮助处理采购成本分析、采购流程自动化、供应商管理等工作。",
             "model": "claude-opus-4-5",
-            "tools": ["bash", "code_exec", "read", "write"],
+            "tools": ["read", "write"],
             "skills": [],
             "status": "active",
             "author": "System",
-            "version": "2.0.0",
+            "version": "1.0.0",
+            "usage_count": 756,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "name": "行政部门 Agent",
+            "description": "行政数据分析 · 会议室/车辆预约自动化 · 会议纪要生成",
+            "icon": "🏢",
+            "category": "企业服务",
+            "system_prompt": "你是行政部门的智能助手，帮助处理行政数据分析、会议室/车辆预约自动化、会议纪要生成等工作。",
+            "model": "claude-opus-4-5",
+            "tools": ["read", "write"],
+            "skills": [],
+            "status": "active",
+            "author": "System",
+            "version": "1.0.0",
+            "usage_count": 1203,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "name": "财务部门 Agent",
+            "description": "财务数据分析 · 费用报销审核 · 财务文书生成",
+            "icon": "💰",
+            "category": "企业服务",
+            "system_prompt": "你是财务部门的智能助手，帮助处理财务数据分析、费用报销审核、财务文书生成等工作。",
+            "model": "claude-opus-4-5",
+            "tools": ["read", "write", "code_exec"],
+            "skills": [],
+            "status": "active",
+            "author": "System",
+            "version": "1.0.0",
+            "usage_count": 432,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "name": "智能体自定义",
+            "description": "自然语言指令训练 · 个性化流程自动化 · 适配专属需求",
+            "icon": "🧩",
+            "category": "自定义",
+            "system_prompt": "你是一个可自定义的智能助手，可以根据用户的自然语言指令进行训练，实现个性化流程自动化。",
+            "model": "claude-opus-4-5",
+            "tools": ["read", "write", "bash", "code_exec"],
+            "skills": [],
+            "status": "active",
+            "author": "System",
+            "version": "1.0.0",
+            "usage_count": 567,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "name": "商业线索 Agent",
+            "description": "智能分级推送 · 全网智能抓取 · 全流程转化管理",
+            "icon": "🔍",
+            "category": "市场营销",
+            "system_prompt": "你是商业线索挖掘专家，帮助进行智能分级推送、全网智能抓取、全流程转化管理等工作。",
+            "model": "claude-opus-4-5",
+            "tools": ["read", "write", "web_search"],
+            "skills": [],
+            "status": "active",
+            "author": "System",
+            "version": "1.0.0",
             "usage_count": 2341,
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "name": "老板视角",
+            "description": "现金流与财务健康 · 增长与战略方向 · 人才与团队",
+            "icon": "👔",
+            "category": "管理决策",
+            "system_prompt": "你是企业管理顾问，从老板视角帮助分析现金流与财务健康、增长与战略方向、人才与团队等问题。",
+            "model": "claude-opus-4-5",
+            "tools": ["read", "write", "code_exec"],
+            "skills": [],
+            "status": "active",
+            "author": "System",
+            "version": "1.0.0",
+            "usage_count": 1892,
         },
     ]
 
+    # 只添加不存在的 Agent
     for sample in samples:
-        agent = AgentModel(
-            **sample,
-            temperature=0.7,
-            max_tokens=4096,
-            module_configs={
-                "memory": {"enabled": True, "type": "conversation", "max_history": 20},
-                "reasoning": {"enabled": True, "style": "step-by-step"},
-            }
-        )
-        db.add(agent)
+        if sample["name"] not in existing_names:
+            agent = AgentModel(
+                **sample,
+                temperature=0.7,
+                max_tokens=4096,
+                module_configs={
+                    "memory": {"enabled": True, "type": "conversation", "max_history": 20},
+                    "reasoning": {"enabled": True, "style": "step-by-step"},
+                }
+            )
+            db.add(agent)
 
     db.commit()
 
@@ -214,6 +297,18 @@ async def list_agents(
     agents = [_db_to_response(a) for a in agents_db]
 
     return AgentListResponse(agents=agents, total=total)
+
+
+@router.get("/by-name/{name}", response_model=Agent)
+async def get_agent_by_name(name: str, db: Session = Depends(get_db)):
+    """根据名称获取 Agent"""
+    # 初始化示例数据
+    _init_sample_agents(db)
+
+    agent_db = db.query(AgentModel).filter(AgentModel.name == name).first()
+    if not agent_db:
+        raise HTTPException(status_code=404, detail=f"Agent '{name}' 不存在")
+    return _db_to_response(agent_db)
 
 
 @router.get("/{agent_id}", response_model=Agent)

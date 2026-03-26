@@ -110,6 +110,8 @@ interface Skill {
 
 const props = defineProps<{
   skills: Skill[]
+  agentId?: string  // 当前 Agent ID，用于过滤数据便签
+  departmentName?: string  // 部门名称，用于过滤数据便签（只显示该部门文件夹内的数据）
 }>()
 
 const emit = defineEmits<{
@@ -282,6 +284,45 @@ const handleDataNoteDrop = (e: DragEvent) => {
 // 数据便签（用于"@"补全和保存）
 const dataNotesForSlash = ref<DataNote[]>([])
 
+// 部门文件夹 ID（用于过滤 @ 数据）
+const departmentFolderId = ref<string | null>(null)
+
+// 初始化部门文件夹（查找或创建）
+const initDepartmentFolder = async () => {
+  if (!props.departmentName) {
+    departmentFolderId.value = null
+    return
+  }
+
+  try {
+    // 查找是否已有该部门的文件夹
+    const allNotes = await dataNotesApi.getAll({ parentId: null })
+    const existingFolder = allNotes.find(
+      n => n.file_type === 'folder' && n.name === props.departmentName
+    )
+
+    if (existingFolder) {
+      departmentFolderId.value = existingFolder.id
+    } else {
+      // 创建部门文件夹
+      const newFolder = await dataNotesApi.createFolder({
+        name: props.departmentName,
+        parent_id: undefined,
+        item_ids: []
+      })
+      departmentFolderId.value = newFolder.id
+    }
+  } catch (e) {
+    console.error('Failed to init department folder:', e)
+  }
+}
+
+// 监听部门名称变化，初始化完成后加载数据
+watch(() => props.departmentName, async () => {
+  await initDepartmentFolder()
+  loadDataNotesForSlash()
+}, { immediate: true })
+
 // "@" 补全弹窗
 const slashPopupRef = ref<InstanceType<typeof SlashCommandPopup> | null>(null)
 const showSlashPopup = ref(false)
@@ -356,10 +397,12 @@ const handleClickOutside = (e: MouseEvent) => {
 const slashQuery = ref('')
 const slashPopupPosition = ref({ x: 0, y: 0 })
 
-// 加载便签数据（用于"@"补全，只加载根目录）
+// 加载便签数据（用于"@"补全，按部门文件夹过滤）
 const loadDataNotesForSlash = async () => {
   try {
-    dataNotesForSlash.value = await dataNotesApi.getAll({ parentId: null })
+    // 如果有部门，只加载部门文件夹内的数据；否则加载根目录
+    const parentId = departmentFolderId.value || null
+    dataNotesForSlash.value = await dataNotesApi.getAll({ parentId })
   } catch (e) {
     console.error('Failed to load data notes:', e)
   }
@@ -397,7 +440,8 @@ const saveToDataNotes = async (outputFile: OutputFile, skillName?: string) => {
       file_type: outputFile.type,
       file_url: fileUrl,
       file_size: fileSize,
-      source_skill: skillName
+      source_skill: skillName,
+      parent_id: departmentFolderId.value || undefined  // 保存到部门文件夹内
     })
     // 标记为已保存，记录 noteId
     savedFiles.value.set(outputFile.url, note.id)
@@ -1230,7 +1274,7 @@ const handleDataNotesChange = () => {
 }
 
 onMounted(() => {
-  loadDataNotesForSlash()
+  // loadDataNotesForSlash() 已在 watch departmentName 中通过 immediate: true 调用
   window.addEventListener('data-notes-changed', handleDataNotesChange)
   document.addEventListener('click', handleClickOutside)
 })

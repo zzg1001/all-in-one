@@ -6,7 +6,7 @@ import AddSkillModal from '@/components/skills/AddSkillModal.vue'
 import AgentChat from '@/components/agent/AgentChat.vue'
 import WorkflowBuilder from '@/components/workflow/WorkflowBuilder.vue'
 import WorkflowRunner from '@/components/workflow/WorkflowRunner.vue'
-import { skillsApi, workflowsApi, agentApi, type Skill as ApiSkill, type Workflow as ApiWorkflow, type ExecutionStatusResponse } from '@/api'
+import { skillsApi, workflowsApi, agentApi, agentsApi, type Skill as ApiSkill, type Workflow as ApiWorkflow, type ExecutionStatusResponse, type Agent } from '@/api'
 
 // Workflow 类型定义
 interface WorkflowNode {
@@ -41,6 +41,39 @@ const activeTab = ref<'skills' | 'agent' | 'workflows' | 'agents' | 'monitor'>('
 
 // 从首页跳转时隐藏侧边栏
 const hideSidebar = computed(() => route.query.from === 'home')
+
+// 从 URL 获取当前 Agent ID
+const currentAgentId = computed(() => currentAgent.value?.id || route.query.agentId as string | undefined)
+
+// 从 URL 获取 Agent 名称
+const agentNameFromQuery = computed(() => {
+  const agentName = route.query.agent as string
+  return agentName ? decodeURIComponent(agentName) : ''
+})
+
+// 当前 Agent 数据
+const currentAgent = ref<Agent | null>(null)
+
+// 从 URL 获取部门名称（从 agent 参数提取，去掉 " Agent" 后缀）
+const departmentName = computed(() => {
+  const name = agentNameFromQuery.value
+  return name ? name.replace(/ Agent$/, '') : ''
+})
+
+// 加载当前 Agent
+const loadCurrentAgent = async () => {
+  const agentName = agentNameFromQuery.value
+  console.log('[loadCurrentAgent] agentName from query:', agentName)
+  if (!agentName) return
+
+  try {
+    currentAgent.value = await agentsApi.getByName(agentName)
+    console.log('[loadCurrentAgent] 加载的 Agent:', currentAgent.value?.name)
+    console.log('[loadCurrentAgent] Agent 配置的技能:', currentAgent.value?.skills)
+  } catch (error) {
+    console.error('Failed to load agent:', error)
+  }
+}
 
 
 // 根据 URL 参数初始化 tab
@@ -177,7 +210,28 @@ const loadSkills = async () => {
   isLoadingSkills.value = true
   skillsError.value = null
   try {
-    const apiSkills = await skillsApi.getAll()
+    // 如果当前 Agent 配置了特定技能 ID，直接按 ID 加载（不按部门过滤）
+    const agentSkillIds = currentAgent.value?.skills || []
+
+    let apiSkills: ApiSkill[]
+    if (agentSkillIds.length > 0) {
+      // Agent 有配置技能，加载所有技能然后按 ID 过滤
+      console.log('[loadSkills] Agent 配置的技能 IDs:', agentSkillIds)
+      const allSkills = await skillsApi.getAll()
+      console.log('[loadSkills] 所有技能:', allSkills.map(s => ({ id: s.id, name: s.name })))
+      apiSkills = allSkills.filter(s => agentSkillIds.includes(s.id))
+      console.log('[loadSkills] 匹配到的技能:', apiSkills.map(s => ({ id: s.id, name: s.name })))
+      if (apiSkills.length === 0) {
+        console.warn('[loadSkills] 警告: Agent 配置的技能 ID 在数据库中找不到!')
+      }
+    } else {
+      // Agent 没有配置技能，按部门过滤
+      apiSkills = await skillsApi.getAll(
+        departmentName.value ? { dept: departmentName.value } : undefined
+      )
+      console.log('[loadSkills] 部门技能数量:', apiSkills.length, '部门:', departmentName.value)
+    }
+
     // 按原始创建时间升序排序（最早的在前面，版本更新不影响位置）
     const sortedSkills = [...apiSkills].sort((a, b) => {
       const timeA = new Date(a.original_created_at || a.created_at).getTime()
@@ -1197,9 +1251,11 @@ const handleClickOutside = (e: MouseEvent) => {
 }
 
 // 监听全局点击和加载数据
-onMounted(() => {
+onMounted(async () => {
   document.addEventListener('click', handleClickOutside)
-  // 加载技能数据
+  // 先加载 Agent（如果从首页跳转）
+  await loadCurrentAgent()
+  // 加载技能数据（会根据 Agent 配置过滤）
   loadSkills()
   // 加载工作流数据
   loadWorkflows()
@@ -1355,6 +1411,8 @@ onUnmounted(() => {
           <AgentChat
             ref="agentChatRef"
             :skills="skills"
+            :agent-id="currentAgentId"
+            :department-name="departmentName"
             @goto-skills="handleGotoSkills"
             @save-workflow="handleSaveWorkflowFromAgent"
           />

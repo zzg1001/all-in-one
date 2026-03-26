@@ -8,6 +8,7 @@ class DataNote(Base):
 
     id = Column(String(50), primary_key=True)
     user_id = Column(String(50), nullable=False, index=True)
+    agent_id = Column(String(36), nullable=True, index=True)  # 关联的 Agent ID
     name = Column(String(100), nullable=False)
     description = Column(Text, nullable=True)
     file_type = Column(String(20), nullable=False)  # 'folder' 表示文件夹

@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { agentsApi, skillsApi, type Skill } from '@/api'
+import SkillCard from '@/components/skills/SkillCard.vue'
+import AddSkillModal from '@/components/skills/AddSkillModal.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -21,22 +24,104 @@ const agent = reactive({
   reasoning: { enabled: true, style: 'step-by-step' }
 })
 
-const availableTools = [
-  { id: 'read', name: '读取文件', icon: '📖', desc: '读取本地文件内容' },
-  { id: 'write', name: '写入文件', icon: '✏️', desc: '创建或修改文件' },
-  { id: 'bash', name: '执行命令', icon: '💻', desc: '执行 Shell 命令' },
-  { id: 'web_search', name: '网络搜索', icon: '🔍', desc: '搜索互联网信息' },
-  { id: 'web_fetch', name: '网页抓取', icon: '🌐', desc: '获取网页内容' },
-  { id: 'image_read', name: '图像识别', icon: '🖼️', desc: '分析图像内容' },
-  { id: 'code_exec', name: '代码执行', icon: '▶️', desc: '执行代码片段' }
-]
+const isLoading = ref(false)
+const loadError = ref('')
 
-const availableSkills = ref([
-  { id: 'excel-to-json', name: 'Excel 转 JSON', icon: '📊' },
-  { id: 'json-to-excel', name: 'JSON 转 Excel', icon: '📑' },
-  { id: 'pdf-reader', name: 'PDF 读取', icon: '📄' },
-  { id: 'image-gen', name: '图像生成', icon: '🎨' }
-])
+// 从 API 加载的技能列表
+const availableSkillsFromApi = ref<Skill[]>([])
+const skillsLoading = ref(false)
+
+// 技能管理相关状态
+const showSkillModal = ref(false)
+const skillModalMode = ref<'create' | 'upload'>('create')
+const editingSkill = ref<Skill | null>(null)  // 编辑时传入的技能
+
+// Toast 提示
+const showToast = ref(false)
+const toastMessage = ref('')
+const showToastMessage = (message: string) => {
+  toastMessage.value = message
+  showToast.value = true
+  setTimeout(() => {
+    showToast.value = false
+  }, 3000)
+}
+
+// 加载技能列表
+const loadSkills = async () => {
+  skillsLoading.value = true
+  try {
+    const skills = await skillsApi.getAll()
+    availableSkillsFromApi.value = skills
+  } catch (error) {
+    console.error('Failed to load skills:', error)
+  } finally {
+    skillsLoading.value = false
+  }
+}
+
+// 打开创建技能弹窗
+const openCreateModal = () => {
+  editingSkill.value = null
+  skillModalMode.value = 'create'
+  showSkillModal.value = true
+}
+
+// 打开上传技能弹窗
+const openUploadModal = () => {
+  editingSkill.value = null
+  skillModalMode.value = 'upload'
+  showSkillModal.value = true
+}
+
+// 打开编辑技能弹窗
+const openEditModal = (skill: Skill) => {
+  editingSkill.value = skill
+  skillModalMode.value = 'create'  // 编辑也用create模式（AI对话模式）
+  showSkillModal.value = true
+}
+
+// 关闭技能弹窗
+const closeSkillModal = () => {
+  showSkillModal.value = false
+  editingSkill.value = null
+}
+
+// 技能创建/编辑成功
+const handleSkillSubmit = (data: any) => {
+  const isEdit = !!editingSkill.value
+  showSkillModal.value = false
+  editingSkill.value = null
+  loadSkills()
+  showToastMessage(isEdit ? '技能修改成功' : '技能创建成功')
+}
+
+// 删除技能
+const deleteSkill = async (index: number) => {
+  const skill = availableSkillsFromApi.value[index]
+  if (!skill) return
+
+  if (!confirm(`确定要删除技能 "${skill.name}" 吗？`)) return
+
+  try {
+    await skillsApi.delete(skill.id)
+    availableSkillsFromApi.value.splice(index, 1)
+    showToastMessage('技能已删除')
+  } catch (error: any) {
+    console.error('Failed to delete skill:', error)
+    showToastMessage('删除失败: ' + (error.message || '未知错误'))
+  }
+}
+
+// 编辑技能（使用AddSkillModal）
+const editSkill = (skill: Skill) => {
+  // 上传的技能不可编辑
+  if (skill.author === 'uploaded') {
+    showToastMessage('上传的技能不可编辑')
+    return
+  }
+  openEditModal(skill)
+}
 
 const icons = ['🤖', '🧠', '💡', '🎯', '🚀', '⚡', '🔧', '📊', '📝', '💻', '🌐', '🔍', '✨', '🎨', '📚']
 const showIconPicker = ref(false)
@@ -51,15 +136,6 @@ const models = [
 const isGenerating = ref(false)
 const generatingField = ref('')
 const activeTab = ref<'basic' | 'prompt' | 'tools' | 'advanced'>('basic')
-
-const toggleTool = (toolId: string) => {
-  const index = agent.tools.indexOf(toolId)
-  if (index > -1) {
-    agent.tools.splice(index, 1)
-  } else {
-    agent.tools.push(toolId)
-  }
-}
 
 const toggleSkill = (skillId: string) => {
   const index = agent.skills.indexOf(skillId)
@@ -110,41 +186,93 @@ const generateDescription = async () => {
   generatingField.value = ''
 }
 
-const recommendTools = async () => {
-  if (!agent.description) {
-    alert('请先填写 Agent 描述')
-    return
-  }
-  isGenerating.value = true
-  generatingField.value = 'tools'
-  await new Promise(resolve => setTimeout(resolve, 1200))
-  const desc = agent.description.toLowerCase()
-  agent.tools = []
-  if (desc.includes('文件') || desc.includes('文档')) agent.tools.push('read', 'write')
-  if (desc.includes('代码') || desc.includes('编程')) agent.tools.push('bash', 'code_exec')
-  if (desc.includes('搜索') || desc.includes('网络')) agent.tools.push('web_search', 'web_fetch')
-  if (desc.includes('图像') || desc.includes('图片')) agent.tools.push('image_read')
-  if (agent.tools.length === 0) agent.tools.push('read')
-  isGenerating.value = false
-  generatingField.value = ''
-}
 
 const saveAgent = async () => {
   if (!agent.name) {
     alert('请填写 Agent 名称')
     return
   }
-  console.log('Saving agent:', agent)
-  alert('Agent 保存成功！')
-  router.push('/agents')
+
+  try {
+    const data = {
+      name: agent.name,
+      description: agent.description,
+      icon: agent.icon,
+      category: agent.category,
+      system_prompt: agent.systemPrompt,
+      model: agent.model,
+      temperature: agent.temperature,
+      max_tokens: agent.maxTokens,
+      tools: agent.tools,
+      skills: agent.skills,
+      memory: {
+        enabled: agent.memory.enabled,
+        type: agent.memory.type,
+        max_history: agent.memory.maxHistory
+      },
+      reasoning: agent.reasoning
+    }
+
+    if (agent.id) {
+      // 更新
+      await agentsApi.update(agent.id, data)
+    } else {
+      // 创建
+      await agentsApi.create(data)
+    }
+    alert('Agent 保存成功！')
+    router.push('/agents')
+  } catch (error: any) {
+    alert('保存失败: ' + (error.message || '未知错误'))
+  }
 }
 
 const goBack = () => router.push('/agents')
-const testAgent = () => router.push({ path: '/', query: { tab: 'agent', testAgent: 'true' } })
+const testAgent = () => router.push({ path: '/', query: { tab: 'agent', agentId: agent.id, agent: agent.name } })
+
+// 加载 Agent 数据
+const loadAgent = async (id: string) => {
+  isLoading.value = true
+  loadError.value = ''
+  try {
+    const data = await agentsApi.getById(id)
+    agent.id = data.id
+    agent.name = data.name
+    agent.description = data.description || ''
+    agent.icon = data.icon || '🤖'
+    agent.category = data.category || '通用助手'
+    agent.systemPrompt = data.system_prompt || ''
+    agent.model = data.model || 'claude-opus-4-5'
+    agent.temperature = data.temperature ?? 0.7
+    agent.maxTokens = data.max_tokens || 4096
+    agent.tools = data.tools || []
+    agent.skills = data.skills || []
+    agent.memory = {
+      enabled: data.memory?.enabled ?? true,
+      type: data.memory?.type || 'conversation',
+      maxHistory: data.memory?.max_history || 20
+    }
+    agent.reasoning = {
+      enabled: data.reasoning?.enabled ?? true,
+      style: data.reasoning?.style || 'step-by-step'
+    }
+  } catch (error: any) {
+    loadError.value = error.message || '加载失败'
+    console.error('Failed to load agent:', error)
+  } finally {
+    isLoading.value = false
+  }
+}
 
 onMounted(() => {
+  // 加载技能列表
+  loadSkills()
+
+  // 如果有 ID，加载 Agent 数据
   const agentId = route.query.id as string
-  if (agentId) console.log('Loading agent:', agentId)
+  if (agentId) {
+    loadAgent(agentId)
+  }
 })
 </script>
 
@@ -204,7 +332,7 @@ onMounted(() => {
         </div>
         <div class="intro-item">
           <span class="intro-number">3</span>
-          <span>工具与技能: 配置 Agent 可使用的能力扩展</span>
+          <span>技能管理: 创建、编辑、删除可用技能</span>
         </div>
         <div class="intro-item">
           <span class="intro-number">4</span>
@@ -238,10 +366,10 @@ onMounted(() => {
           <button :class="['nav-item', { active: activeTab === 'tools' }]" @click="activeTab = 'tools'">
             <span class="nav-number">3</span>
             <div class="nav-text">
-              <span class="nav-title">工具与技能</span>
-              <span class="nav-desc">扩展能力配置</span>
+              <span class="nav-title">技能管理</span>
+              <span class="nav-desc">管理可用技能</span>
             </div>
-            <span v-if="agent.tools.length > 0" class="nav-check">✓</span>
+            <span v-if="agent.skills.length > 0" class="nav-check">✓</span>
           </button>
           <button :class="['nav-item', { active: activeTab === 'advanced' }]" @click="activeTab = 'advanced'">
             <span class="nav-number">4</span>
@@ -362,55 +490,64 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- 工具与技能 -->
-        <div v-show="activeTab === 'tools'" class="form-panel">
+        <!-- 技能管理 -->
+        <div v-show="activeTab === 'tools'" class="form-panel form-panel-wide">
           <div class="panel-header">
-            <h2>工具与技能</h2>
-            <p>选择 Agent 可使用的能力</p>
-            <button class="btn-ai header-ai" :disabled="isGenerating" @click="recommendTools">
-              <span class="ai-icon">✨</span>
-              <span v-if="generatingField === 'tools'">推荐中...</span>
-              <span v-else>AI 推荐</span>
-            </button>
+            <div class="panel-header-left">
+              <h2>技能管理</h2>
+              <p>管理 Agent 可使用的技能，支持创建、编辑和删除</p>
+            </div>
+            <div class="panel-header-right">
+              <button class="btn-create-skill" @click="openCreateModal">
+                <svg viewBox="0 0 20 20" fill="currentColor">
+                  <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd"/>
+                </svg>
+                创建技能
+              </button>
+              <button class="btn-upload-skill" @click="openUploadModal">
+                <svg viewBox="0 0 20 20" fill="currentColor">
+                  <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clip-rule="evenodd"/>
+                </svg>
+                上传技能
+              </button>
+            </div>
           </div>
 
-          <div class="tools-section">
-            <h3>内置工具</h3>
-            <div class="tools-grid">
+          <!-- 技能网格 -->
+          <div class="skills-grid-wrapper">
+            <div v-if="skillsLoading" class="skills-loading">
+              <div class="loading-spinner-small"></div>
+              <span>加载技能中...</span>
+            </div>
+            <div v-else-if="availableSkillsFromApi.length === 0" class="empty-skills-large">
+              <div class="empty-icon">⚡</div>
+              <h3>暂无技能</h3>
+              <p>创建或上传你的第一个技能</p>
+              <div class="empty-actions">
+                <button class="btn-create-skill" @click="openCreateModal">创建技能</button>
+                <button class="btn-upload-skill" @click="openUploadModal">上传技能</button>
+              </div>
+            </div>
+            <div v-else class="skills-grid">
               <div
-                v-for="tool in availableTools"
-                :key="tool.id"
-                :class="['tool-card', { selected: agent.tools.includes(tool.id) }]"
-                @click="toggleTool(tool.id)"
-              >
-                <div class="tool-header">
-                  <span class="tool-icon">{{ tool.icon }}</span>
-                  <span class="tool-check">
-                    <svg v-if="agent.tools.includes(tool.id)" viewBox="0 0 20 20" fill="currentColor">
-                      <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
-                    </svg>
-                  </span>
-                </div>
-                <span class="tool-name">{{ tool.name }}</span>
-                <span class="tool-desc">{{ tool.desc }}</span>
+              v-for="(skill, index) in availableSkillsFromApi"
+              :key="skill.id"
+              :class="['skill-grid-item', { selected: agent.skills.includes(skill.id) }]"
+              @click="toggleSkill(skill.id)"
+            >
+                <SkillCard
+                  :skill="skill"
+                  @delete="deleteSkill(index)"
+                  @edit="editSkill(skill)"
+                />
               </div>
             </div>
           </div>
 
-          <div class="skills-section">
-            <h3>自定义技能</h3>
-            <div class="skills-grid">
-              <div
-                v-for="skill in availableSkills"
-                :key="skill.id"
-                :class="['skill-card', { selected: agent.skills.includes(skill.id) }]"
-                @click="toggleSkill(skill.id)"
-              >
-                <span class="skill-icon">{{ skill.icon }}</span>
-                <span class="skill-name">{{ skill.name }}</span>
-                <span v-if="agent.skills.includes(skill.id)" class="skill-check">✓</span>
-              </div>
-            </div>
+          <!-- 已选技能提示 -->
+          <div v-if="agent.skills.length > 0" class="selected-skills-hint">
+            <span class="hint-icon">✓</span>
+            <span>已选择 {{ agent.skills.length }} 个技能</span>
           </div>
         </div>
 
@@ -495,72 +632,73 @@ onMounted(() => {
         </div>
       </div>
     </div>
+
+    <!-- 加载状态 -->
+    <div v-if="isLoading" class="loading-overlay">
+      <div class="loading-spinner"></div>
+      <span class="loading-text">加载中...</span>
+    </div>
+
+    <!-- 加载错误 -->
+    <div v-if="loadError" class="error-overlay">
+      <div class="error-content">
+        <span class="error-icon">⚠️</span>
+        <p>{{ loadError }}</p>
+        <button @click="goBack">返回</button>
+      </div>
+    </div>
+
+    <!-- 技能创建/编辑/上传弹窗 -->
+    <AddSkillModal
+      :show="showSkillModal"
+      :mode="skillModalMode"
+      :edit-skill="editingSkill"
+      @close="closeSkillModal"
+      @submit="handleSkillSubmit"
+    />
+
+    <!-- Toast 提示 -->
+    <Transition name="toast">
+      <div v-if="showToast" class="toast-message">
+        {{ toastMessage }}
+      </div>
+    </Transition>
   </div>
 </template>
 
 <style scoped>
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
 
 .agent-studio {
   position: fixed;
   top: 0;
-  left: 60px;
+  left: 0;
   right: 0;
   bottom: 0;
-  background: #0a0a0f;
-  color: #e4e4e7;
+  background: #f5f7fa;
+  color: #1f2937;
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  font-family: 'Plus Jakarta Sans', 'Noto Sans SC', -apple-system, sans-serif;
 }
 
-/* 装饰背景 */
+/* 装饰背景 - 隐藏 */
 .bg-decoration {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  overflow: hidden;
+  display: none;
 }
 
-.bg-orb {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(100px);
-}
-
-.orb-1 {
-  width: 500px;
-  height: 500px;
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.3), rgba(139, 92, 246, 0.2));
-  top: -100px;
-  left: 50%;
-}
-
-.orb-2 {
-  width: 300px;
-  height: 300px;
-  background: linear-gradient(135deg, rgba(6, 182, 212, 0.2), rgba(59, 130, 246, 0.15));
-  bottom: 10%;
-  right: 10%;
-}
-
-.bg-lines {
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(99, 102, 241, 0.02) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(99, 102, 241, 0.02) 1px, transparent 1px);
-  background-size: 50px 50px;
+.bg-orb, .orb-1, .orb-2, .bg-lines {
+  display: none;
 }
 
 /* 顶部 Header */
 .studio-header {
   flex-shrink: 0;
   position: relative;
-  padding: 14px 24px;
-  background: rgba(10, 10, 15, 0.95);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  backdrop-filter: blur(12px);
+  padding: 12px 24px;
+  background: #ffffff;
+  border-bottom: 1px solid #e5e7eb;
   z-index: 10;
 }
 
@@ -568,7 +706,7 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 /* 功能说明条 */
@@ -576,18 +714,18 @@ onMounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 16px;
-  padding: 10px 14px;
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.06), rgba(139, 92, 246, 0.04));
-  border: 1px solid rgba(99, 102, 241, 0.15);
+  padding: 8px 12px;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
   border-radius: 8px;
 }
 
 .intro-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   font-size: 11px;
-  color: #a1a1aa;
+  color: #6b7280;
 }
 
 .intro-number {
@@ -596,18 +734,18 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.3), rgba(139, 92, 246, 0.3));
+  background: linear-gradient(135deg, #1677ff, #4096ff);
   border-radius: 50%;
   font-size: 10px;
   font-weight: 600;
-  color: #c4b5fd;
+  color: #fff;
   flex-shrink: 0;
 }
 
 .header-left {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
 }
 
 .btn-back {
@@ -616,17 +754,17 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
   border-radius: 8px;
-  color: #a1a1aa;
+  color: #6b7280;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .btn-back:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
+  background: #e5e7eb;
+  color: #1f2937;
 }
 
 .btn-back svg {
@@ -637,7 +775,7 @@ onMounted(() => {
 .header-title {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
 .title-badge {
@@ -646,23 +784,21 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(139, 92, 246, 0.2));
-  border: 1px solid rgba(99, 102, 241, 0.3);
+  background: linear-gradient(135deg, #60a5fa 0%, #93c5fd 50%, #c4b5fd 100%);
   border-radius: 10px;
   font-size: 18px;
 }
 
 .title-text h1 {
-  font-family: 'Space Grotesk', sans-serif;
   font-size: 16px;
   font-weight: 600;
   margin: 0;
-  color: #fff;
+  color: #1f2937;
 }
 
 .title-text p {
   font-size: 11px;
-  color: #71717a;
+  color: #9ca3af;
   margin: 2px 0 0;
 }
 
@@ -684,24 +820,25 @@ onMounted(() => {
 }
 
 .btn-test {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: #a1a1aa;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  color: #6b7280;
 }
 
 .btn-test:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
+  background: #e5e7eb;
+  color: #1f2937;
 }
 
 .btn-save {
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  background: linear-gradient(135deg, #1677ff 0%, #4096ff 100%);
   border: none;
   color: white;
+  box-shadow: 0 2px 8px rgba(22, 119, 255, 0.3);
 }
 
 .btn-save:hover {
-  box-shadow: 0 4px 20px rgba(99, 102, 241, 0.4);
+  box-shadow: 0 4px 12px rgba(22, 119, 255, 0.4);
   transform: translateY(-1px);
 }
 
@@ -721,10 +858,10 @@ onMounted(() => {
 
 /* 左侧导航 */
 .studio-nav {
-  width: 220px;
-  padding: 16px;
-  background: rgba(255, 255, 255, 0.02);
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  width: 200px;
+  padding: 14px;
+  background: #ffffff;
+  border-right: 1px solid #e5e7eb;
   display: flex;
   flex-direction: column;
 }
@@ -737,10 +874,10 @@ onMounted(() => {
   display: block;
   font-size: 10px;
   font-weight: 600;
-  color: #52525b;
+  color: #9ca3af;
   text-transform: uppercase;
   letter-spacing: 1px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .nav-item {
@@ -754,17 +891,17 @@ onMounted(() => {
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
   text-align: left;
 }
 
 .nav-item:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: #f3f4f6;
 }
 
 .nav-item.active {
-  background: rgba(99, 102, 241, 0.1);
-  border-color: rgba(99, 102, 241, 0.3);
+  background: #eff6ff;
+  border-color: #bfdbfe;
 }
 
 .nav-number {
@@ -773,16 +910,16 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.05);
+  background: #f3f4f6;
   border-radius: 6px;
   font-size: 11px;
   font-weight: 600;
-  color: #71717a;
+  color: #9ca3af;
   flex-shrink: 0;
 }
 
 .nav-item.active .nav-number {
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  background: linear-gradient(135deg, #1677ff 0%, #4096ff 100%);
   color: white;
 }
 
@@ -796,25 +933,25 @@ onMounted(() => {
 .nav-title {
   font-size: 12px;
   font-weight: 500;
-  color: #e4e4e7;
+  color: #1f2937;
 }
 
 .nav-desc {
   font-size: 10px;
-  color: #52525b;
+  color: #9ca3af;
   margin-top: 2px;
 }
 
 .nav-check {
-  color: #4ade80;
+  color: #22c55e;
   font-size: 12px;
 }
 
 /* 预览卡片 */
 .nav-preview {
   margin-top: auto;
-  padding-top: 16px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding-top: 14px;
+  border-top: 1px solid #e5e7eb;
 }
 
 .preview-card {
@@ -823,8 +960,8 @@ onMounted(() => {
   align-items: center;
   gap: 6px;
   padding: 14px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
   border-radius: 10px;
 }
 
@@ -835,25 +972,26 @@ onMounted(() => {
 .preview-name {
   font-size: 12px;
   font-weight: 500;
-  color: #e4e4e7;
+  color: #1f2937;
   text-align: center;
 }
 
 .preview-model {
-  font-family: 'JetBrains Mono', monospace;
   font-size: 9px;
-  color: #52525b;
+  color: #9ca3af;
 }
 
 /* 右侧表单 */
 .studio-form {
   flex: 1;
-  padding: 20px 32px;
+  padding: 16px 28px;
   overflow-y: auto;
+  background: #f5f7fa;
 }
 
 .form-panel {
   animation: fadeIn 0.3s ease;
+  max-width: 720px;
 }
 
 @keyframes fadeIn {
@@ -862,21 +1000,20 @@ onMounted(() => {
 }
 
 .panel-header {
-  margin-bottom: 20px;
+  margin-bottom: 16px;
   position: relative;
 }
 
 .panel-header h2 {
-  font-family: 'Space Grotesk', sans-serif;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
-  margin: 0 0 6px;
-  color: #fff;
+  margin: 0 0 4px;
+  color: #1f2937;
 }
 
 .panel-header p {
   font-size: 12px;
-  color: #71717a;
+  color: #9ca3af;
   margin: 0;
 }
 
@@ -890,12 +1027,12 @@ onMounted(() => {
 .form-grid {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: 14px;
+  margin-bottom: 14px;
 }
 
 .form-group {
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 }
 
 .form-group label {
@@ -904,30 +1041,29 @@ onMounted(() => {
   gap: 10px;
   font-size: 12px;
   font-weight: 500;
-  color: #a1a1aa;
-  margin-bottom: 8px;
+  color: #6b7280;
+  margin-bottom: 6px;
 }
 
 .required {
-  color: #f87171;
+  color: #ef4444;
 }
 
 .form-input, .form-textarea {
   width: 100%;
   padding: 10px 14px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
   border-radius: 8px;
-  color: #e4e4e7;
+  color: #1f2937;
   font-size: 13px;
   outline: none;
   transition: all 0.2s;
 }
 
 .form-input:focus, .form-textarea:focus {
-  background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(99, 102, 241, 0.5);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+  border-color: #1677ff;
+  box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.1);
 }
 
 .form-textarea {
@@ -941,10 +1077,10 @@ onMounted(() => {
   align-items: center;
   gap: 4px;
   padding: 4px 10px;
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(139, 92, 246, 0.15));
-  border: 1px solid rgba(99, 102, 241, 0.3);
+  background: linear-gradient(135deg, rgba(22, 119, 255, 0.1), rgba(64, 150, 255, 0.1));
+  border: 1px solid rgba(22, 119, 255, 0.3);
   border-radius: 12px;
-  color: #a5b4fc;
+  color: #1677ff;
   font-size: 10px;
   font-weight: 500;
   cursor: pointer;
@@ -952,8 +1088,8 @@ onMounted(() => {
 }
 
 .btn-ai:hover:not(:disabled) {
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(139, 92, 246, 0.25));
-  box-shadow: 0 0 12px rgba(99, 102, 241, 0.2);
+  background: linear-gradient(135deg, rgba(22, 119, 255, 0.15), rgba(64, 150, 255, 0.15));
+  box-shadow: 0 0 8px rgba(22, 119, 255, 0.15);
 }
 
 .btn-ai:disabled {
@@ -971,11 +1107,11 @@ onMounted(() => {
 }
 
 .current-icon {
-  width: 56px;
-  height: 56px;
-  font-size: 28px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 2px dashed rgba(255, 255, 255, 0.15);
+  width: 52px;
+  height: 52px;
+  font-size: 26px;
+  background: #ffffff;
+  border: 2px dashed #d1d5db;
   border-radius: 12px;
   cursor: pointer;
   transition: all 0.2s;
@@ -983,8 +1119,8 @@ onMounted(() => {
 }
 
 .current-icon:hover {
-  border-color: rgba(99, 102, 241, 0.5);
-  background: rgba(99, 102, 241, 0.1);
+  border-color: #1677ff;
+  background: #f0f7ff;
 }
 
 .icon-edit {
@@ -992,21 +1128,21 @@ onMounted(() => {
   bottom: 4px;
   right: 4px;
   font-size: 12px;
-  color: #71717a;
+  color: #9ca3af;
 }
 
 .icon-picker {
   position: absolute;
-  top: 64px;
+  top: 60px;
   left: 0;
   display: grid;
   grid-template-columns: repeat(5, 1fr);
   gap: 6px;
   padding: 12px;
-  background: #18181b;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
   border-radius: 12px;
-  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
   z-index: 20;
 }
 
@@ -1014,7 +1150,7 @@ onMounted(() => {
   width: 36px;
   height: 36px;
   font-size: 18px;
-  background: rgba(255, 255, 255, 0.03);
+  background: #f3f4f6;
   border: 1px solid transparent;
   border-radius: 8px;
   cursor: pointer;
@@ -1022,13 +1158,13 @@ onMounted(() => {
 }
 
 .icon-option:hover {
-  background: rgba(99, 102, 241, 0.2);
+  background: #e0f2fe;
   transform: scale(1.1);
 }
 
 .icon-option.selected {
-  background: rgba(99, 102, 241, 0.3);
-  border-color: rgba(99, 102, 241, 0.5);
+  background: #dbeafe;
+  border-color: #1677ff;
 }
 
 /* 分类选择 */
@@ -1040,24 +1176,24 @@ onMounted(() => {
 
 .category-btn {
   padding: 6px 12px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
   border-radius: 8px;
-  color: #a1a1aa;
+  color: #6b7280;
   font-size: 12px;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .category-btn:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: #e4e4e7;
+  background: #f3f4f6;
+  color: #1f2937;
 }
 
 .category-btn.selected {
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(139, 92, 246, 0.2));
-  border-color: rgba(99, 102, 241, 0.5);
-  color: #a5b4fc;
+  background: #eff6ff;
+  border-color: #1677ff;
+  color: #1677ff;
 }
 
 /* 提示词编辑器 */
@@ -1068,11 +1204,11 @@ onMounted(() => {
 .prompt-editor {
   width: 100%;
   padding: 14px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
   border-radius: 10px;
-  color: #e4e4e7;
-  font-family: 'JetBrains Mono', monospace;
+  color: #1f2937;
+  font-family: 'SF Mono', 'Monaco', 'Inconsolata', monospace;
   font-size: 12px;
   line-height: 1.6;
   resize: vertical;
@@ -1081,37 +1217,37 @@ onMounted(() => {
 }
 
 .prompt-editor:focus {
-  border-color: rgba(99, 102, 241, 0.5);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+  border-color: #1677ff;
+  box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.1);
 }
 
 .editor-footer {
   display: flex;
   justify-content: flex-end;
-  padding: 8px 0;
+  padding: 6px 0;
 }
 
 .char-count {
-  font-size: 12px;
-  color: #52525b;
+  font-size: 11px;
+  color: #9ca3af;
 }
 
 /* 提示建议 */
 .prompt-tips {
-  background: rgba(99, 102, 241, 0.05);
-  border: 1px solid rgba(99, 102, 241, 0.15);
+  background: #f0f7ff;
+  border: 1px solid #bfdbfe;
   border-radius: 10px;
-  padding: 14px;
+  padding: 12px;
 }
 
 .tip-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
   font-size: 12px;
   font-weight: 500;
-  color: #a5b4fc;
+  color: #1677ff;
 }
 
 .tip-icon {
@@ -1124,137 +1260,224 @@ onMounted(() => {
 }
 
 .tip-list li {
-  color: #71717a;
+  color: #6b7280;
   font-size: 11px;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
   line-height: 1.4;
 }
 
-/* 工具网格 */
-.tools-section, .skills-section {
-  margin-bottom: 20px;
+/* 技能管理面板 */
+.form-panel-wide {
+  max-width: 100%;
 }
 
-.tools-section h3, .skills-section h3 {
-  font-size: 13px;
+.form-panel-wide .panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.panel-header-left h2 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0 0 4px;
+  color: #1f2937;
+}
+
+.panel-header-left p {
+  font-size: 12px;
+  color: #9ca3af;
+  margin: 0;
+}
+
+.panel-header-right {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-create-skill, .btn-upload-skill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 12px;
   font-weight: 500;
-  color: #e4e4e7;
-  margin: 0 0 12px;
-}
-
-.tools-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 10px;
-}
-
-.tool-card {
-  padding: 12px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 10px;
   cursor: pointer;
   transition: all 0.2s;
 }
 
-.tool-card:hover {
-  background: rgba(255, 255, 255, 0.04);
-  border-color: rgba(255, 255, 255, 0.1);
+.btn-create-skill {
+  background: linear-gradient(135deg, #1677ff 0%, #4096ff 100%);
+  border: none;
+  color: white;
 }
 
-.tool-card.selected {
-  background: rgba(99, 102, 241, 0.1);
-  border-color: rgba(99, 102, 241, 0.4);
+.btn-create-skill:hover {
+  box-shadow: 0 2px 8px rgba(22, 119, 255, 0.3);
 }
 
-.tool-header {
+.btn-upload-skill {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  color: #6b7280;
+}
+
+.btn-upload-skill:hover {
+  background: #f3f4f6;
+  color: #1f2937;
+}
+
+.btn-create-skill svg, .btn-upload-skill svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* 技能网格容器 */
+.skills-grid-wrapper {
+  min-height: 300px;
+}
+
+.skills-loading {
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 8px;
-}
-
-.tool-icon {
-  font-size: 20px;
-}
-
-.tool-check {
-  width: 18px;
-  height: 18px;
-  display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: rgba(99, 102, 241, 0.2);
-  border-radius: 4px;
+  gap: 12px;
+  padding: 60px 20px;
+  color: #9ca3af;
+  font-size: 13px;
 }
 
-.tool-check svg {
-  width: 12px;
-  height: 12px;
-  color: #a5b4fc;
+.loading-spinner-small {
+  width: 24px;
+  height: 24px;
+  border: 2px solid rgba(22, 119, 255, 0.2);
+  border-top-color: #1677ff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
 }
 
-.tool-name {
-  display: block;
-  font-size: 12px;
-  font-weight: 500;
-  color: #e4e4e7;
-  margin-bottom: 2px;
+.empty-skills-large {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  text-align: center;
 }
 
-.tool-desc {
-  display: block;
-  font-size: 10px;
-  color: #52525b;
+.empty-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+}
+
+.empty-skills-large h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 0 0 8px;
+}
+
+.empty-skills-large p {
+  font-size: 13px;
+  color: #9ca3af;
+  margin: 0 0 20px;
+}
+
+.empty-actions {
+  display: flex;
+  gap: 12px;
 }
 
 /* 技能网格 */
 .skills-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
 }
 
-.skill-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  padding: 12px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 10px;
-  cursor: pointer;
-  transition: all 0.2s;
+.skill-grid-item {
   position: relative;
 }
 
-.skill-card:hover {
-  background: rgba(255, 255, 255, 0.04);
+/* 技能卡片 */
+.skill-grid-item {
+  position: relative;
+  cursor: pointer;
+  border-radius: 10px;
+  transition: all 0.2s;
 }
 
-.skill-card.selected {
-  background: rgba(99, 102, 241, 0.1);
-  border-color: rgba(99, 102, 241, 0.4);
+.skill-grid-item:hover {
+  transform: translateY(-2px);
 }
 
-.skill-icon {
-  font-size: 22px;
+/* 选中状态 - 用伪元素覆盖蓝色蒙层 */
+.skill-grid-item.selected {
+  box-shadow: 0 0 0 2px #1677ff;
 }
 
-.skill-name {
-  font-size: 11px;
-  color: #a1a1aa;
-  text-align: center;
-}
-
-.skill-check {
+.skill-grid-item.selected::before {
+  content: '';
   position: absolute;
-  top: 8px;
-  right: 8px;
-  color: #4ade80;
+  inset: 0;
+  background: rgba(22, 119, 255, 0.08);
+  border-radius: 10px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* 已选技能提示 */
+.selected-skills-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 10px 14px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #15803d;
+}
+
+.hint-icon {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #22c55e;
+  border-radius: 50%;
+  color: white;
   font-size: 10px;
 }
+
+/* Toast 提示 */
+.toast-message {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 12px 24px;
+  background: #1f2937;
+  color: white;
+  border-radius: 8px;
+  font-size: 13px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+}
+
+.toast-enter-active, .toast-leave-active {
+  transition: all 0.3s ease;
+}
+
+.toast-enter-from, .toast-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(20px);
+}
+
 
 /* 模型选择 */
 .model-cards {
@@ -1268,20 +1491,20 @@ onMounted(() => {
   align-items: center;
   gap: 12px;
   padding: 12px 14px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
   border-radius: 10px;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .model-card:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: #f8fafc;
 }
 
 .model-card.selected {
-  background: rgba(99, 102, 241, 0.1);
-  border-color: rgba(99, 102, 241, 0.4);
+  background: #eff6ff;
+  border-color: #1677ff;
 }
 
 .model-radio {
@@ -1290,19 +1513,19 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 2px solid rgba(255, 255, 255, 0.2);
+  border: 2px solid #d1d5db;
   border-radius: 50%;
   flex-shrink: 0;
 }
 
 .model-card.selected .model-radio {
-  border-color: #6366f1;
+  border-color: #1677ff;
 }
 
 .radio-dot {
   width: 8px;
   height: 8px;
-  background: #6366f1;
+  background: #1677ff;
   border-radius: 50%;
   opacity: 0;
   transform: scale(0);
@@ -1328,7 +1551,7 @@ onMounted(() => {
 .model-name {
   font-size: 12px;
   font-weight: 500;
-  color: #e4e4e7;
+  color: #1f2937;
 }
 
 .model-badge {
@@ -1341,29 +1564,29 @@ onMounted(() => {
 }
 
 .model-badge.pro {
-  background: rgba(234, 179, 8, 0.2);
-  color: #fbbf24;
+  background: #fef3c7;
+  color: #d97706;
 }
 
 .model-badge.fast {
-  background: rgba(34, 197, 94, 0.2);
-  color: #4ade80;
+  background: #dcfce7;
+  color: #16a34a;
 }
 
 .model-desc {
   font-size: 10px;
-  color: #52525b;
+  color: #9ca3af;
 }
 
 /* 滑块 */
 .slider-wrapper {
-  padding: 10px 0;
+  padding: 8px 0;
 }
 
 .form-slider {
   width: 100%;
   height: 6px;
-  background: rgba(255, 255, 255, 0.1);
+  background: #e5e7eb;
   border-radius: 3px;
   appearance: none;
   cursor: pointer;
@@ -1371,29 +1594,28 @@ onMounted(() => {
 
 .form-slider::-webkit-slider-thumb {
   appearance: none;
-  width: 20px;
-  height: 20px;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  width: 18px;
+  height: 18px;
+  background: linear-gradient(135deg, #1677ff 0%, #4096ff 100%);
   border-radius: 50%;
   cursor: pointer;
-  box-shadow: 0 2px 10px rgba(99, 102, 241, 0.4);
+  box-shadow: 0 2px 8px rgba(22, 119, 255, 0.35);
 }
 
 .slider-labels {
   display: flex;
   justify-content: space-between;
-  font-size: 12px;
-  color: #52525b;
-  margin-top: 10px;
+  font-size: 11px;
+  color: #9ca3af;
+  margin-top: 8px;
 }
 
 .value-badge {
   padding: 2px 10px;
-  background: rgba(99, 102, 241, 0.15);
+  background: #eff6ff;
   border-radius: 10px;
-  font-family: 'JetBrains Mono', monospace;
   font-size: 12px;
-  color: #a5b4fc;
+  color: #1677ff;
 }
 
 /* Token 输入 */
@@ -1411,7 +1633,7 @@ onMounted(() => {
   position: absolute;
   right: 16px;
   font-size: 13px;
-  color: #52525b;
+  color: #9ca3af;
 }
 
 /* 开关组 */
@@ -1420,8 +1642,8 @@ onMounted(() => {
   flex-direction: column;
   gap: 12px;
   padding: 14px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
   border-radius: 10px;
 }
 
@@ -1440,12 +1662,12 @@ onMounted(() => {
 .toggle-title {
   font-size: 12px;
   font-weight: 500;
-  color: #e4e4e7;
+  color: #1f2937;
 }
 
 .toggle-desc {
   font-size: 10px;
-  color: #52525b;
+  color: #9ca3af;
 }
 
 .toggle-switch {
@@ -1464,7 +1686,7 @@ onMounted(() => {
 .toggle-track {
   position: absolute;
   inset: 0;
-  background: rgba(255, 255, 255, 0.1);
+  background: #d1d5db;
   border-radius: 11px;
   transition: all 0.3s;
 }
@@ -1479,14 +1701,91 @@ onMounted(() => {
   background: white;
   border-radius: 50%;
   transition: all 0.3s;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
 }
 
 .toggle-switch input:checked + .toggle-track {
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  background: linear-gradient(135deg, #1677ff 0%, #4096ff 100%);
 }
 
 .toggle-switch input:checked + .toggle-track::after {
   transform: translateX(18px);
+}
+
+/* 加载状态 */
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.9);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  z-index: 100;
+}
+
+.loading-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid rgba(22, 119, 255, 0.2);
+  border-top-color: #1677ff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-text {
+  font-size: 14px;
+  color: #6b7280;
+}
+
+/* 错误状态 */
+.error-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.95);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.error-content {
+  text-align: center;
+  padding: 32px;
+  background: #ffffff;
+  border: 1px solid #fecaca;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+}
+
+.error-icon {
+  font-size: 48px;
+}
+
+.error-content p {
+  color: #ef4444;
+  font-size: 14px;
+  margin: 12px 0 20px;
+}
+
+.error-content button {
+  padding: 8px 20px;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  color: #6b7280;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.error-content button:hover {
+  background: #e5e7eb;
+  color: #1f2937;
 }
 </style>

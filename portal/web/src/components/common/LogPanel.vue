@@ -129,7 +129,20 @@ body{background:#0a0a0a;font-family:'Cascadia Code','Fira Code','SF Mono',Monaco
   }
 
   // 连接 WebSocket
+  let wsReconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let isWindowClosed = false
+
   const connect = () => {
+    // 如果窗口已关闭，不再重连
+    if (isWindowClosed || logWindow?.closed) return
+
+    // 关闭旧连接
+    if (ws) {
+      ws.onclose = null
+      ws.close()
+      ws = null
+    }
+
     const wsUrl = `${config.wsUrl}/api/logs/ws`
     console.log('Connecting:', wsUrl)
 
@@ -144,7 +157,11 @@ body{background:#0a0a0a;font-family:'Cascadia Code','Fira Code','SF Mono',Monaco
     ws.onclose = () => {
       console.log('Disconnected')
       dotEl.classList.remove('on')
-      setTimeout(connect, 3000)
+      ws = null
+      // 延迟重连
+      if (!isWindowClosed && !logWindow?.closed) {
+        wsReconnectTimer = setTimeout(connect, 3000)
+      }
     }
 
     ws.onerror = (e) => {
@@ -182,6 +199,18 @@ body{background:#0a0a0a;font-family:'Cascadia Code','Fira Code','SF Mono',Monaco
   const checkClosed = setInterval(() => {
     if (logWindow?.closed) {
       clearInterval(checkClosed)
+      isWindowClosed = true
+      // 清理重连定时器
+      if (wsReconnectTimer) {
+        clearTimeout(wsReconnectTimer)
+        wsReconnectTimer = null
+      }
+      // 关闭WebSocket
+      if (ws) {
+        ws.onclose = null
+        ws.close()
+        ws = null
+      }
       logWindow = null
       emit('update:show', false)
     }
@@ -190,27 +219,37 @@ body{background:#0a0a0a;font-family:'Cascadia Code','Fira Code','SF Mono',Monaco
   emit('update:show', true)
 }
 
-// 状态检测
-let statusWs: WebSocket | null = null
+// 状态检测 - 使用 HTTP 轮询代替 WebSocket
+let statusCheckTimer: ReturnType<typeof setInterval> | null = null
+let isUnmounted = false
 
-const checkConnection = () => {
-  const wsUrl = `${config.wsUrl}/api/logs/ws`
-  statusWs = new WebSocket(wsUrl)
-  statusWs.onopen = () => { connected.value = true }
-  statusWs.onclose = () => {
+const checkConnection = async () => {
+  try {
+    const response = await fetch(`${config.serverBaseUrl}/api/logs/recent?limit=1`)
+    connected.value = response.ok
+  } catch {
     connected.value = false
-    setTimeout(checkConnection, 5000)
-  }
-  statusWs.onmessage = (e) => {
-    try {
-      const d = JSON.parse(e.data)
-      if (d.id) logCount.value++
-    } catch {}
   }
 }
 
-onMounted(() => checkConnection())
-onUnmounted(() => statusWs?.close())
+onMounted(() => {
+  isUnmounted = false
+  // 立即检查一次
+  checkConnection()
+  // 每 10 秒检查一次连接状态
+  statusCheckTimer = setInterval(() => {
+    if (!isUnmounted) checkConnection()
+  }, 10000)
+})
+
+onUnmounted(() => {
+  isUnmounted = true
+  // 清理定时器
+  if (statusCheckTimer) {
+    clearInterval(statusCheckTimer)
+    statusCheckTimer = null
+  }
+})
 </script>
 
 <template>

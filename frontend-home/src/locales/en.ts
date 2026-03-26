@@ -2,6 +2,7 @@ export default {
   // Header
   header: {
     products: 'Products',
+    manage: 'Manage',
     solutions: 'Solutions',
     customers: 'Customers',
     quickEntry: 'Quick Entry',

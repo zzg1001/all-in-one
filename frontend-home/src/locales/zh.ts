@@ -2,6 +2,7 @@ export default {
   // Header
   header: {
     products: '产品',
+    manage: '管理',
     solutions: '解决方案',
     customers: '客户案例',
     quickEntry: '快速入口',

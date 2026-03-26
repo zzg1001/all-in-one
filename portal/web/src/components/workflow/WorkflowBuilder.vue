@@ -195,7 +195,7 @@ watch(searchQuery, (newQuery) => {
       }
 
       const [skillsResult, workflowsResult] = await Promise.all([
-        skillsApi.getAll(newQuery),
+        skillsApi.getAll({ search: newQuery }),
         workflowsApi.getAll(newQuery)
       ])
       searchedSkills.value = skillsResult
