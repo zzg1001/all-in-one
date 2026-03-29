@@ -318,6 +318,8 @@ export interface ChatRequest {
   history?: ChatMessage[]
   skill_ids?: string[]  // UUID array
   context?: ContextItem[]  // 上下文项列表
+  agent_id?: string  // Agent ID for RAG data isolation
+  enable_rag?: boolean  // Enable RAG retrieval (default: true)
 }
 
 export interface ChatResponse {
@@ -346,6 +348,7 @@ export interface ExecuteRequest {
   skill_id: string  // UUID
   script_name?: string
   params?: Record<string, any>
+  agent_id?: string  // Agent ID for RAG data isolation
 }
 
 export interface OutputFile {
@@ -449,6 +452,7 @@ export interface SkillChatRequest {
   user_choice?: 'execute' | 'skip' | null
   pending_actions?: SkillChatAction[]
   current_action_index?: number
+  agent_id?: string  // Agent ID for RAG data isolation
 }
 
 export interface SkillChatEvent {
@@ -526,7 +530,7 @@ export const agentApi = {
       body: JSON.stringify(data),
     }),
 
-  // Chat (streaming via SSE)
+  // Chat (streaming via SSE) - with RAG support
   chatStream: async function* (
     data: ChatRequest,
     signal?: AbortSignal
@@ -536,8 +540,12 @@ export const agentApi = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'X-User-ID': getUserId(),  // For RAG data retrieval
       },
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        ...data,
+        enable_rag: data.enable_rag !== false  // Default to true
+      }),
       signal,
     })
 

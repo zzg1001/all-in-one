@@ -1,7 +1,7 @@
 import uuid
 from pathlib import Path
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Header
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 import json
@@ -68,8 +68,14 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/chat/stream")
-async def chat_stream(request: ChatRequest, db: Session = Depends(get_db)):
-    """Chat with AI agent (streaming via SSE)"""
+async def chat_stream(
+    request: ChatRequest,
+    x_user_id: str = Header(None, alias="X-User-ID"),
+    db: Session = Depends(get_db)
+):
+    """Chat with AI agent (streaming via SSE, with RAG support)"""
+    user_id = x_user_id or "anonymous"
+
     # 记录会话上下文
     from models.skill import Skill
     skill_names = []
@@ -86,13 +92,73 @@ async def chat_stream(request: ChatRequest, db: Session = Depends(get_db)):
     )
     log_ai_start(request.message[:100])
 
+    # RAG: 从向量数据库检索相关内容
+    rag_context = ""
+    if request.enable_rag and (request.agent_id or user_id):
+        try:
+            # 使用延迟导入避免循环依赖
+            import importlib.util
+            import os
+            module_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'services', 'vector_service.py')
+            spec = importlib.util.spec_from_file_location('vector_service', module_path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            vector_service = module.get_vector_service()
+
+            if vector_service:
+                log_info(f"RAG 检索: query={request.message[:50]}..., agent_id={request.agent_id}, user_id={user_id}")
+                rag_context = await vector_service.get_context_for_chat(
+                    query=request.message,
+                    agent_id=request.agent_id,
+                    user_id=user_id,
+                    max_context_length=4000
+                )
+                if rag_context:
+                    log_info(f"RAG 检索到 {len(rag_context)} 字符的相关内容")
+                else:
+                    log_info("RAG 检索: 未找到相关内容")
+            else:
+                log_info("RAG: vector_service 为 None")
+        except Exception as e:
+            import traceback
+            log_error(f"RAG 检索失败: {str(e)[:100]}")
+            traceback.print_exc()
+
+    # 构建带 RAG 上下文的消息
+    message_with_context = request.message
+    if rag_context:
+        message_with_context = f"""## 从知识库检索到的相关数据
+
+以下是从用户的文件管理（File Manage）中检索到的相关内容：
+
+{rag_context}
+
+---
+
+## 用户问题
+{request.message}
+
+## 回答要求
+1. **如果用户在查询数据**（如"帮我看一下..."、"查找..."、"筛选..."）：
+   - 直接列出检索到的相关数据
+   - 按表格或列表形式展示
+   - 标注数据来源和相似度
+
+2. **如果用户在提问**：
+   - 基于检索到的内容回答问题
+   - 引用具体数据作为依据
+
+3. **如果检索结果为空或不相关**：
+   - 告知用户未找到相关数据
+   - 建议用户先在 File Manage 中上传相关文件"""
+
     service = AgentService(db)
 
     async def generate():
         try:
             history = [{"role": m.role, "content": m.content} for m in request.history] if request.history else []
             async for chunk in service.chat_stream(
-                message=request.message,
+                message=message_with_context,
                 history=history,
                 skill_ids=request.skill_ids
             ):
@@ -148,6 +214,10 @@ async def execute_skill(request: ExecuteRequest, db: Session = Depends(get_db)):
     # 【关键】处理文件路径：将相对路径转换为绝对路径
     params = dict(request.params) if request.params else {}
     base_dir = Path(__file__).parent.parent  # product-background 目录
+
+    # 【RAG】传递 agent_id 用于向量数据库数据隔离
+    if request.agent_id:
+        params['agent_id'] = request.agent_id
 
     # 处理 file_path
     if params.get('file_path'):
@@ -997,7 +1067,8 @@ async def skill_chat_stream(request: SkillChatRequest, db: Session = Depends(get
                 file_paths=request.file_paths,
                 user_choice=request.user_choice,
                 pending_actions=pending_actions,
-                current_action_index=request.current_action_index
+                current_action_index=request.current_action_index,
+                agent_id=request.agent_id
             ):
                 yield f"data: {chunk}\n\n"
 

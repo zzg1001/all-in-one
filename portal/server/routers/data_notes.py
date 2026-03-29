@@ -13,6 +13,34 @@ from config import get_uploads_dir
 from models.data_note import DataNote
 from schemas.data_note import DataNoteCreate, DataNoteUpdate, DataNoteResponse, FolderCreate, MoveToFolder
 
+# 向量服务（可选，导入失败不影响基础功能）
+# 使用延迟导入避免循环依赖
+_vector_service_available = False
+_vector_service = None
+
+def get_vector_service():
+    """延迟获取向量服务，避免循环导入"""
+    global _vector_service_available, _vector_service
+    if _vector_service is not None:
+        return _vector_service
+    try:
+        # 直接导入模块，不触发 services/__init__.py
+        import importlib.util
+        import os
+        module_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'services', 'vector_service.py')
+        spec = importlib.util.spec_from_file_location('vector_service', module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _vector_service = module.get_vector_service()
+        _vector_service_available = True
+        print(f"[DataNotes] Vector service loaded successfully")
+        return _vector_service
+    except Exception as e:
+        print(f"[DataNotes] Vector service not available: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
 router = APIRouter(prefix="/api", tags=["Data Notes"])
 
 MAX_FOLDER_LEVEL = 3  # 最大文件夹层级
@@ -183,6 +211,40 @@ async def create_data_note(
     db.add(note)
     db.commit()
     db.refresh(note)
+
+    # 如果是文件（非文件夹），索引到向量数据库（可选功能）
+    if note.file_type != 'folder' and note.file_url:
+        print(f"[DataNotes] Starting vector indexing for file: {note.id}, agent_id: {note.agent_id}")
+        try:
+            vector_service = get_vector_service()
+            if vector_service:
+                # 解析文件路径
+                file_path = note.file_url
+                if file_path.startswith('/uploads/'):
+                    file_path = str(UPLOADS_DIR / file_path[len('/uploads/'):])
+                elif file_path.startswith('/outputs/'):
+                    from config import get_outputs_dir
+                    file_path = str(get_outputs_dir() / file_path[len('/outputs/'):])
+
+                print(f"[DataNotes] Indexing file path: {file_path}")
+
+                # 直接 await 索引文件（不使用 create_task，避免静默失败）
+                chunk_count = await vector_service.index_file(
+                    file_id=note.id,
+                    file_path=file_path,
+                    user_id=user_id,
+                    agent_id=note.agent_id,
+                    metadata={"name": note.name, "file_type": note.file_type}
+                )
+                print(f"[DataNotes] Vector indexing completed: {chunk_count} chunks indexed")
+            else:
+                print("[DataNotes] Vector service is None")
+        except Exception as e:
+            import traceback
+            print(f"[DataNotes] Vector indexing failed: {e}")
+            traceback.print_exc()
+            # 不阻塞主流程
+
     return note
 
 
@@ -226,14 +288,47 @@ async def delete_data_note(
     if not note:
         raise HTTPException(status_code=404, detail="数据便签不存在")
 
+    # 收集需要删除向量索引的文件ID
+    file_ids_to_delete = []
+
     # 如果是文件夹，递归删除内容
     if note.file_type == 'folder':
+        file_ids_to_delete = collect_file_ids_in_folder(db, user_id, note_id)
         delete_folder_contents(db, user_id, note_id)
+    elif note.file_type != 'folder':
+        file_ids_to_delete = [note_id]
 
     db.delete(note)
     db.commit()
 
+    # 异步删除向量索引（可选功能）
+    if file_ids_to_delete:
+        try:
+            vector_service = get_vector_service()
+            if vector_service:
+                for file_id in file_ids_to_delete:
+                    await vector_service.delete_file_index(file_id)
+        except Exception as e:
+            print(f"[DataNotes] Vector index deletion failed: {e}")
+
     return None
+
+
+def collect_file_ids_in_folder(db: Session, user_id: str, folder_id: str) -> List[str]:
+    """收集文件夹内所有文件的ID（用于删除向量索引）"""
+    file_ids = []
+    children = db.query(DataNote).filter(
+        DataNote.user_id == user_id,
+        DataNote.parent_id == folder_id
+    ).all()
+
+    for child in children:
+        if child.file_type == 'folder':
+            file_ids.extend(collect_file_ids_in_folder(db, user_id, child.id))
+        else:
+            file_ids.append(child.id)
+
+    return file_ids
 
 
 def delete_folder_contents(db: Session, user_id: str, folder_id: str):
@@ -566,3 +661,66 @@ def collect_folder_files_recursive(db: Session, user_id: str, folder_id: str, fi
                 "file_url": child.file_url,
                 "file_size": child.file_size
             })
+
+
+# ============ 向量搜索 API ============
+
+from pydantic import BaseModel
+
+class VectorSearchRequest(BaseModel):
+    query: str
+    agent_id: Optional[str] = None
+    top_k: int = 5
+
+
+class VectorSearchResult(BaseModel):
+    id: str
+    file_id: str
+    content: str
+    similarity: float
+    metadata: dict = {}
+
+
+@router.post("/data-notes/search", response_model=List[VectorSearchResult])
+async def vector_search(
+    request: VectorSearchRequest,
+    user_id: str = Depends(get_user_id)
+):
+    """
+    向量相似度搜索
+
+    从用户的文件中搜索与查询相关的内容片段。
+    数据按 agent_id 隔离。
+    """
+    try:
+        vector_service = get_vector_service()
+        if not vector_service:
+            raise HTTPException(status_code=503, detail="向量搜索服务未初始化")
+        results = await vector_service.search(
+            query=request.query,
+            agent_id=request.agent_id,
+            user_id=user_id,
+            top_k=request.top_k
+        )
+        return results
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"搜索失败: {str(e)}")
+
+
+@router.get("/data-notes/vector-stats")
+async def get_vector_stats(
+    agent_id: Optional[str] = None,
+    user_id: str = Depends(get_user_id)
+):
+    """获取向量库统计信息"""
+    try:
+        vector_service = get_vector_service()
+        if not vector_service:
+            return {"file_count": 0, "chunk_count": 0, "status": "not_initialized"}
+        stats = await vector_service.get_file_stats(agent_id=agent_id)
+        stats["status"] = "ok"
+        return stats
+    except Exception as e:
+        return {"file_count": 0, "chunk_count": 0, "status": f"error: {str(e)}"}

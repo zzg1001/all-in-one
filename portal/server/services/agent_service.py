@@ -79,14 +79,33 @@ class AgentService:
 
         skills_info = []
         for skill in skills:
+            # 优先从 SKILL.md 读取描述
+            description = skill.description
+            if skill.folder_path:
+                skill_folder = SKILLS_STORAGE_DIR / skill.folder_path
+                skill_md_path = skill_folder / "SKILL.md"
+                if skill_md_path.exists():
+                    try:
+                        import yaml
+                        content = skill_md_path.read_text(encoding="utf-8")
+                        # 解析 YAML front matter
+                        if content.startswith("---"):
+                            parts = content.split("---", 2)
+                            if len(parts) >= 3:
+                                front_matter = yaml.safe_load(parts[1])
+                                if front_matter and "description" in front_matter:
+                                    description = front_matter["description"]
+                    except Exception:
+                        pass
+
             info = f"- ID: {skill.id}, Name: {skill.name}"
-            if skill.description:
-                info += f", Description: {skill.description}"
+            if description:
+                info += f", Description: {description}"
             if skill.tags:
                 info += f", Tags: {', '.join(skill.tags)}"
             skills_info.append(info)
 
-            # Load full SKILL.md content if requested and skill has folder
+            # Load full SKILL.md content if requested
             if load_full_content and skill.folder_path:
                 skill_folder = SKILLS_STORAGE_DIR / skill.folder_path
                 skill_md_path = skill_folder / "SKILL.md"
@@ -110,30 +129,20 @@ class AgentService:
         load_full = skill_ids is not None and len(skill_ids) > 0
         skills_context = self._get_skills_context(skill_ids, load_full_content=load_full)
 
-        system_prompt = f"""你是一个智能AI Agent，能够分析用户需求并规划技能（Skills）执行流程。
+        system_prompt = f"""你是一个智能助手。
 
 {skills_context}
 
-## 核心职责
-当用户提出**任务型请求**时，分析并规划技能执行流程。
+## 规则
+1. **只使用上面 Available skills 列表中的技能**，使用 Name 字段的值作为技能名
+2. 如果用户请求能匹配到已有技能，直接调用
+3. 如果没有匹配的技能，正常回答
 
-## 技能匹配规则
-**重要**：优先使用已存在的技能！匹配时注意：
-- "ppt"、"PPT"、"幻灯片"、"演示文稿" → 使用 **pptx** 技能
-- "excel"、"表格"、"xlsx" → 使用相关 Excel 技能
-- 如果有近似名称的技能存在，使用它而不是建议创建新技能
-- 只有当确实没有合适的技能时，才设置 exists: false
+## 技能调用格式
+在回复末尾添加：
+<!--SKILL_PLAN:[{{"skill":"技能名（使用上面列表中的Name）","action":"描述","exists":true}}]-->
 
-## 技能规划格式
-如果识别到任务请求，在回复末尾添加：
-<!--SKILL_PLAN:[{{"skill":"技能名","action":"操作描述","exists":true/false}}]-->
-
-## 多文件处理规则
-**重要**：当用户上传多个文件时，同一类型的文件应由**同一个技能**一次性处理，不要为每个文件创建单独的步骤。
-
-## 回复格式
-- 使用 Markdown：**粗体**、`代码`、列表
-- 简洁专业，中文回复"""
+**重要**：skill 字段必须使用 Available skills 列表中的 Name 值。"""
 
         messages = []
         if history:
@@ -161,57 +170,30 @@ class AgentService:
         load_full = skill_ids is not None and len(skill_ids) > 0
         skills_context = self._get_skills_context(skill_ids, load_full_content=load_full)
 
-        system_prompt = f"""你是一个智能AI Agent，能够分析用户需求并规划技能（Skills）执行流程。
+        system_prompt = f"""你是一个智能助手。
 
 {skills_context}
 
-## 核心职责
-当用户提出**任务型请求**（如"帮我做..."、"我想要..."、"请处理..."、"分析..."、"生成..."等），你需要：
-1. 分析任务需要哪些步骤
-2. 将步骤映射到可用的 Skills
-3. 在回复末尾输出技能规划（使用特定格式）
+## 规则
+1. **只使用上面 Available skills 列表中的技能**，使用 Name 字段的值作为技能名
+2. 如果用户请求能匹配到已有技能，直接调用，不要询问
+3. 如果没有匹配的技能，正常回答，不要规划
 
-## 技能匹配规则（最重要）
-**必须优先使用已存在的技能！** 匹配时注意：
-- "ppt"、"PPT"、"幻灯片"、"演示文稿"、"slides" → 使用 **pptx** 技能
-- "excel"、"表格"、"xlsx"、"xls" → 使用相关 Excel 技能
-- "word"、"文档"、"docx" → 使用相关 Word 技能
-- 如果有**名称相似或功能匹配**的技能存在，**必须使用它**，设置 exists: true
-- 只有当 Available skills 列表中**确实没有**任何合适的技能时，才设置 exists: false
+## 技能调用格式
+在回复末尾添加（必须是最后一行）：
+<!--SKILL_PLAN:[{{"skill":"技能名（使用上面列表中的Name）","action":"描述","exists":true}}]-->
 
-## 技能规划格式
-如果识别到任务请求，请在回复**末尾**添加如下格式（必须是最后一行）：
-<!--SKILL_PLAN:[{{"skill":"技能名","action":"操作描述","exists":true/false}}]-->
-
-- `skill`: 技能名称（**必须使用 Available skills 中存在的技能名称**，而不是自己编造的名称）
-- `action`: 这一步要做什么
-- `exists`: 检查 Available skills 列表判断技能是否存在
-
+**重要**：skill 字段必须使用 Available skills 列表中的 Name 值，否则技能无法执行。
 
 ## 示例
-用户: "帮我分析销售数据并生成报告"
+假设 Available skills 包含: Name: 消防商机筛选器
 
-回复:
-好的，我来帮你完成这个任务！我规划了以下执行流程：
+用户："找消防商机"
+回复：好的，正在搜索消防商机...
+<!--SKILL_PLAN:[{{"skill":"消防商机筛选器","action":"搜索消防商机","exists":true}}]-->
 
-1. **数据处理** - 使用 `data-processor` 读取和清洗数据
-2. **数据分析** - 使用 `data-analyzer` 进行统计分析
-3. **报告生成** - 使用 `report-generator` 生成可视化报告
-
-点击下方流程即可开始执行。
-
-<!--SKILL_PLAN:[{{"skill":"data-processor","action":"读取销售数据","exists":true}},{{"skill":"data-analyzer","action":"统计分析","exists":false}},{{"skill":"report-generator","action":"生成报告","exists":false}}]-->
-
-## 多文件处理规则
-**重要**：当用户上传多个文件时：
-- 同一类型的文件应由**同一个技能**一次性处理（技能会接收所有文件路径）
-- 不要为每个文件创建单独的技能步骤
-- 例如：用户上传4个Excel文件要求分析，只需要1个 `data-understanding` 技能，不是4个
-
-## 回复格式
-- 使用 Markdown：**粗体**、`代码`、列表
-- 简洁专业，中文回复
-- 如果不是任务请求（如闲聊、提问），正常对话，不需要 SKILL_PLAN"""
+用户："今天天气怎么样"
+回复：我无法查询实时天气，建议你查看天气应用。（无SKILL_PLAN）"""
 
         messages = []
         if history:
@@ -440,12 +422,15 @@ print(r'{output_path}')
                 f.write(wrapped_code)
                 script_path = f.name
 
-            # 执行脚本
+            # 执行脚本 - 使用干净的环境变量
+            clean_env = {k: v for k, v in os.environ.items()
+                        if not k.startswith('PYTHON') and k != '__PYVENV_LAUNCHER__'}
             result = subprocess.run(
-                ['python', script_path],
+                [sys.executable, script_path],
                 capture_output=True,
                 text=True,
-                timeout=60
+                timeout=60,
+                env=clean_env
             )
 
             # 清理临时文件
@@ -517,12 +502,15 @@ OUTPUT_PATH = r'{output_path}'
                 f.write(wrapped_code)
                 script_path = f.name
 
-            # 执行脚本
+            # 执行脚本 - 使用干净的环境变量
+            clean_env = {k: v for k, v in os.environ.items()
+                        if not k.startswith('PYTHON') and k != '__PYVENV_LAUNCHER__'}
             result = subprocess.run(
-                ['python', script_path],
+                [sys.executable, script_path],
                 capture_output=True,
                 text=True,
-                timeout=120  # 图片处理可能需要更长时间
+                timeout=120,  # 图片处理可能需要更长时间
+                env=clean_env
             )
 
             # 清理临时文件
@@ -885,13 +873,16 @@ def save_data(data, name=None, format='csv'):
                 f.write(wrapped_code)
                 script_path = f.name
 
-            # 执行脚本
+            # 执行脚本 - 使用干净的环境变量避免Python路径冲突
+            clean_env = {k: v for k, v in os.environ.items()
+                        if not k.startswith('PYTHON') and k != '__PYVENV_LAUNCHER__'}
             result = subprocess.run(
-                ['python', script_path],
+                [sys.executable, script_path],
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                cwd=str(OUTPUTS_DIR)
+                cwd=str(OUTPUTS_DIR),
+                env=clean_env
             )
 
             # 清理临时文件
@@ -1014,7 +1005,7 @@ def save_data(data, name=None, format='csv'):
             return False, None, f"Failed to read script: {e}", None
 
         # 检测代码类型
-        has_main_func = "def main(params)" in code or "def main(params:" in code
+        has_main_func = "def main(params" in code
         if not has_main_func:
             code = self._wrap_code_with_main(code, skill.name)
             has_main_func = True
@@ -2691,9 +2682,7 @@ const pptxgen = require("pptxgenjs");
 
             elif output_format == "png_code" and file_type == "py":
                 # 执行 Python 脚本生成图片
-                python_path = shutil.which('python') or shutil.which('python3')
-                if not python_path:
-                    return {"success": False, "output": "Python 未安装"}
+                python_path = sys.executable
 
                 timestamp = int(time.time())
                 output_filename = f"{skill.name}_{timestamp}.png"
@@ -2716,12 +2705,16 @@ const pptxgen = require("pptxgenjs");
 
                 # 使用 asyncio.to_thread 避免阻塞事件循环
                 import asyncio
+                # 使用干净的环境变量，避免Python路径冲突
+                clean_env = {k: v for k, v in os.environ.items()
+                            if not k.startswith('PYTHON') and k != '__PYVENV_LAUNCHER__'}
                 def run_python():
                     return subprocess.run(
                         [python_path, temp_script],
                         capture_output=True,
                         text=True,
-                        timeout=120
+                        timeout=120,
+                        env=clean_env
                     )
                 result = await asyncio.to_thread(run_python)
 
@@ -2774,7 +2767,8 @@ const pptxgen = require("pptxgenjs");
         file_paths: List[str] = None,
         user_choice: str = None,
         pending_actions: List[Dict] = None,
-        current_action_index: int = 0
+        current_action_index: int = 0,
+        agent_id: str = None
     ) -> AsyncGenerator[str, None]:
         """
         Claude Code 风格的交互式技能执行
@@ -2803,6 +2797,51 @@ const pptxgen = require("pptxgenjs");
         if not skill:
             yield json.dumps({"type": "error", "message": "技能不存在"})
             return
+
+        # 【优化】如果skill有可执行脚本(main.py)，直接执行，不走AI分析
+        if skill.folder_path:
+            skill_folder = SKILLS_STORAGE_DIR / skill.folder_path
+            main_script = skill_folder / (skill.entry_script or "main.py")
+            print(f"[skill_chat_stream] Checking script: {main_script}, exists: {main_script.exists()}")
+            print(f"[skill_chat_stream] file_paths: {file_paths}")
+
+            if main_script.exists():
+                yield json.dumps({"type": "content", "content": f"正在执行 {skill.name}...\n"})
+
+                # 构建params
+                params = {"context": context}
+                if agent_id:
+                    params["agent_id"] = agent_id
+                if file_paths:
+                    params["files"] = file_paths
+                    params["file_paths"] = file_paths
+                    if len(file_paths) == 1:
+                        params["file_path"] = file_paths[0]
+                        params["input_file"] = {"path": file_paths[0]}
+                    else:
+                        params["input_file"] = {"path": file_paths[0]}
+                else:
+                    # 没有文件时也执行，让脚本自己处理错误
+                    print(f"[skill_chat_stream] No file_paths provided, executing anyway")
+
+                # 直接执行脚本
+                success, result, error, output = self.execute_skill(skill_id, params=params)
+
+                if success:
+                    yield json.dumps({"type": "content", "content": f"\n{output or ''}\n"})
+                    # 检查是否有输出文件
+                    if isinstance(result, dict) and "_output_file" in result:
+                        yield json.dumps({
+                            "type": "action_result",
+                            "index": 0,
+                            "success": True,
+                            "output": result.get("message", "执行成功"),
+                            "output_file": result["_output_file"]
+                        })
+                    yield json.dumps({"type": "all_actions_done"})
+                else:
+                    yield json.dumps({"type": "error", "message": error or "执行失败"})
+                return
 
         # 如果有待执行的操作且用户选择了执行
         if pending_actions and user_choice == "execute" and current_action_index < len(pending_actions):
@@ -3047,13 +3086,17 @@ const pptxgen = require("pptxgenjs");
                     if d in command.lower():
                         return {"success": False, "output": f"不允许执行危险命令: {command}"}
 
+                # 使用干净的环境变量，避免Python路径冲突
+                clean_env = {k: v for k, v in os.environ.items()
+                            if not k.startswith('PYTHON') and k != '__PYVENV_LAUNCHER__'}
                 result = subprocess.run(
                     command,
                     shell=True,
                     capture_output=True,
                     text=True,
                     timeout=120,
-                    cwd=str(OUTPUTS_DIR)
+                    cwd=str(OUTPUTS_DIR),
+                    env=clean_env
                 )
 
                 output = result.stdout or result.stderr or "(无输出)"
@@ -3362,9 +3405,9 @@ const pptxgen = require("pptxgenjs");
                             script_path.write_text(script_content, encoding="utf-8")
                             print(f"[_execute_tool] 修复 Python 脚本路径: {script_name}")
 
-                    env = os.environ
-                else:
-                    env = os.environ
+                # 使用干净的环境变量，避免Python路径冲突
+                clean_env = {k: v for k, v in os.environ.items()
+                            if not k.startswith('PYTHON') and k != '__PYVENV_LAUNCHER__'}
 
                 # 执行命令
                 def run_cmd():
@@ -3375,7 +3418,7 @@ const pptxgen = require("pptxgenjs");
                         text=True,
                         timeout=120,
                         cwd=cwd,
-                        env=env
+                        env=clean_env
                     )
 
                 result = await asyncio.to_thread(run_cmd)
@@ -3641,8 +3684,8 @@ const pptxgen = require("pptxgenjs");
                 except:
                     pass
 
-        # 如果是 direct 模式且有脚本，直接执行
-        if exec_mode == "direct" and not pending_tool_call and not conversation and skill.folder_path and skill.entry_script:
+        # 如果是 direct 模式且有脚本，直接执行（不需要 AI 分析）
+        if exec_mode == "direct" and skill.folder_path and skill.entry_script:
             skill_folder = SKILLS_STORAGE_DIR / skill.folder_path
             script_path = skill_folder / skill.entry_script
 
@@ -3683,13 +3726,19 @@ const pptxgen = require("pptxgenjs");
                 try:
                     import subprocess
 
+                    # 使用干净的环境变量避免Python路径冲突
+                    clean_env = {k: v for k, v in os.environ.items()
+                                if not k.startswith('PYTHON') and k != '__PYVENV_LAUNCHER__'}
+
                     result = await asyncio.to_thread(
                         lambda: subprocess.run(
-                            ["python", str(script_path), input_file],
+                            [sys.executable, str(script_path), input_file],
                             capture_output=True,
                             text=True,
                             timeout=120,
-                            cwd=str(skill_folder)
+                            cwd=str(skill_folder),
+                            env=clean_env,
+                            encoding='utf-8'
                         )
                     )
 

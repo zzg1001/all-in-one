@@ -317,11 +317,16 @@ const initDepartmentFolder = async () => {
   }
 }
 
-// 监听部门名称变化，初始化完成后加载数据
-watch(() => props.departmentName, async () => {
-  await initDepartmentFolder()
-  loadDataNotesForSlash()
-}, { immediate: true })
+// 监听部门名称变化，重置初始化标记
+// 数据便签会在用户输入 "@" 时按需加载
+watch(() => props.departmentName, (newVal, oldVal) => {
+  // 部门变化时重置初始化标记，下次加载时会重新初始化
+  if (newVal !== oldVal) {
+    departmentFolderInitialized.value = false
+    departmentFolderId.value = null
+    dataNotesForSlash.value = []
+  }
+})
 
 // "@" 补全弹窗
 const slashPopupRef = ref<InstanceType<typeof SlashCommandPopup> | null>(null)
@@ -397,9 +402,17 @@ const handleClickOutside = (e: MouseEvent) => {
 const slashQuery = ref('')
 const slashPopupPosition = ref({ x: 0, y: 0 })
 
+// 标记是否已初始化部门文件夹
+const departmentFolderInitialized = ref(false)
+
 // 加载便签数据（用于"@"补全，按部门文件夹过滤）
 const loadDataNotesForSlash = async () => {
   try {
+    // 首次加载时初始化部门文件夹
+    if (props.departmentName && !departmentFolderInitialized.value) {
+      await initDepartmentFolder()
+      departmentFolderInitialized.value = true
+    }
     // 如果有部门，只加载部门文件夹内的数据；否则加载根目录
     const parentId = departmentFolderId.value || null
     dataNotesForSlash.value = await dataNotesApi.getAll({ parentId })
@@ -2069,7 +2082,9 @@ const fallbackToChatStream = async (aiMsgId: number) => {
     let fullContent = ''
     for await (const chunk of agentApi.chatStream({
       message: `用户需求：${userInputs[userInputs.length - 1] || ''}\n\n请根据用户的需求，总结一下你理解的要点，然后询问用户是否确认执行。如果用户之前有提过其他要求，也要整合进来。`,
-      history: history
+      history: history,
+      agent_id: props.agentId,
+      enable_rag: true
     })) {
       fullContent += chunk
       const msgIndex = skillPanelMessages.value.findIndex(m => m.id === aiMsgId)
@@ -2468,186 +2483,20 @@ const handleSkillComplete = async (result: { success: boolean; output?: string; 
             ;(window as any).__lastSkillParams = params
             ;(window as any).__lastPanelFiles = panelFilePaths
 
-            // ========== Claude Code 风格：使用交互式执行 ==========
-            // 打开右侧面板进行交互式执行
-            executingSkill.value = { name: step.skillName, icon: step.skillIcon, description: step.description }
-            executionContext.value = contextValue
-            executingStepInfo.value = { messageId, stepId: step.id }
-
-            // 初始化面板状态
-            skillPanelMessages.value = [{
-              id: Date.now(),
-              role: 'assistant',
-              content: `正在执行 **${step.skillName}**...\n\n${step.description}`,
-              timestamp: new Date()
-            }]
-            skillPanelInput.value = ''
-            skillPanelProcessing.value = true
-            skillPanelComplete.value = false
-            skillPanelWaitingConfirm.value = false
-            skillChatConversation.value = []
-            pendingActions.value = []
-            currentActionIndex.value = 0
-            actionPending.value = false
-            autoExecuteAll.value = false
-            panelCollectedFilePaths.value = finalFilePaths
-
-            showSkillExecution.value = true
-            scrollSkillPanelToBottom()
-
-            // 调用交互式执行 API
+            // ========== 简化：直接执行技能 ==========
             try {
-              const request: SkillChatRequest = {
-                skill_id: step.skillId || '',
-                context: contextValue,
-                conversation: [],
-                file_paths: finalFilePaths.length > 0 ? finalFilePaths : undefined
-              }
-
-              let fullContent = ''
-              const aiMsgId = Date.now() + 1
-              skillPanelMessages.value.push({
-                id: aiMsgId,
-                role: 'assistant',
-                content: '',
-                timestamp: new Date()
-              })
-
-              for await (const event of agentApi.skillChatStream(request)) {
-                if (event.type === 'content' && event.text) {
-                  fullContent += event.text
-                  const displayContent = fullContent.replace(/<!--ACTION:\w+-->[\s\S]*?<!--END_ACTION-->/g, '')
-                  const msgIndex = skillPanelMessages.value.findIndex(m => m.id === aiMsgId)
-                  if (msgIndex !== -1) {
-                    skillPanelMessages.value[msgIndex] = {
-                      ...skillPanelMessages.value[msgIndex],
-                      content: displayContent
-                    }
-                  }
-                  scrollSkillPanelToBottom()
-
-                } else if (event.type === 'actions_planned') {
-                  console.log('[handleSkillComplete] Actions planned:', event.actions)
-                  pendingActions.value = event.actions || []
-
-                } else if (event.type === 'action_pending') {
-                  console.log('[handleSkillComplete] Action pending:', event.index, event.action)
-                  currentActionIndex.value = event.index || 0
-                  skillPanelProcessing.value = false
-
-                  const action = event.action
-                  let actionDesc = ''
-                  if (action?.type === 'write') {
-                    actionDesc = `📝 **写入文件**: ${action.data?.file || 'unknown'}`
-                  } else if (action?.type === 'run') {
-                    actionDesc = `▶️ **执行命令**: \`${action.data?.command || 'unknown'}\``
-                  } else if (action?.type === 'generate') {
-                    actionDesc = `🔧 **生成内容**: ${action.data?.type || 'unknown'}`
-                  }
-                  skillPanelSummary.value = `${actionDesc}\n\n(${(event.index || 0) + 1}/${event.total || 1})`
-
-                  if (autoExecuteAll.value) {
-                    skillPanelMessages.value.push({
-                      id: Date.now(),
-                      role: 'user',
-                      content: `✓ 自动执行: ${actionDesc.replace(/\*\*/g, '')}`,
-                      timestamp: new Date()
-                    })
-                    scrollSkillPanelToBottom()
-                    setTimeout(() => callSkillChatStream('execute'), 100)
-                  } else {
-                    actionPending.value = true
-                    skillPanelWaitingConfirm.value = true
-                  }
-
-                } else if (event.type === 'action_executing') {
-                  actionPending.value = false
-                  skillPanelWaitingConfirm.value = false
-                  skillPanelMessages.value.push({
-                    id: Date.now(),
-                    role: 'assistant',
-                    content: `⏳ 正在执行步骤 ${(event.index || 0) + 1}...`,
-                    timestamp: new Date(),
-                    isExecuting: true
-                  })
-                  scrollSkillPanelToBottom()
-
-                } else if (event.type === 'action_result') {
-                  const lastMsg = skillPanelMessages.value[skillPanelMessages.value.length - 1]
-                  if (lastMsg?.isExecuting) {
-                    lastMsg.isExecuting = false
-                    lastMsg.content = event.success
-                      ? `✅ 步骤 ${(event.index || 0) + 1} 完成: ${event.output || '成功'}`
-                      : `❌ 步骤 ${(event.index || 0) + 1} 失败: ${event.output || '未知错误'}`
-                  }
-                  if (event.output_file) {
-                    step.outputFile = {
-                      type: event.output_file.type as OutputFile['type'],
-                      name: event.output_file.name,
-                      url: event.output_file.url,
-                      size: event.output_file.size?.toString()
-                    }
-                  }
-                  scrollSkillPanelToBottom()
-
-                } else if (event.type === 'action_skipped') {
-                  skillPanelMessages.value.push({
-                    id: Date.now(),
-                    role: 'assistant',
-                    content: `⏭️ 已跳过步骤 ${(event.index || 0) + 1}`,
-                    timestamp: new Date()
-                  })
-                  scrollSkillPanelToBottom()
-
-                } else if (event.type === 'all_actions_done') {
-                  actionPending.value = false
-                  skillPanelWaitingConfirm.value = false
-                  pendingActions.value = []
-                  skillPanelMessages.value.push({
-                    id: Date.now(),
-                    role: 'assistant',
-                    content: '🎉 所有步骤执行完成！',
-                    timestamp: new Date()
-                  })
-                  step.status = 'completed'
-                  step.output = '执行完成'
-                  skillPanelComplete.value = true
-                  setTimeout(() => closeSkillExecution(false), 1500)
-
-                } else if (event.type === 'done') {
-                  // 如果没有 actions，说明 AI 没有规划操作，回退到旧模式
-                  if (pendingActions.value.length === 0) {
-                    console.log('[handleSkillComplete] No actions, falling back to direct execute')
-                    skillPanelProcessing.value = false
-                    // 显示完成，但提示需要手动操作
-                    skillPanelMessages.value.push({
-                      id: Date.now(),
-                      role: 'assistant',
-                      content: '已完成分析。如需生成文件，请根据上述内容手动操作。',
-                      timestamp: new Date()
-                    })
-                  }
-
-                } else if (event.type === 'error') {
-                  skillPanelProcessing.value = false
-                  skillPanelMessages.value.push({
-                    id: Date.now(),
-                    role: 'assistant',
-                    content: `❌ 错误: ${event.message}`,
-                    timestamp: new Date()
-                  })
-                  step.status = 'error'
-                  step.output = event.message || '执行失败'
-                }
-              }
-            } catch (error: any) {
-              console.error('[handleSkillComplete] Stream error:', error)
-              skillPanelProcessing.value = false
-              // 回退到旧的执行方式
               const response = await agentApi.execute({
-                skill_id: step.skillId,
-                params
+                skill_id: step.skillId || '',
+                params: {
+                  ...params,
+                  context: contextValue,
+                  file_paths: finalFilePaths.length > 0 ? finalFilePaths : undefined
+                },
+                agent_id: props.agentId
               })
+
+              console.log('[handleSkillComplete] Execute response:', response)
+
               if (response.success) {
                 step.status = 'completed'
                 step.output = response.output || `✓ ${step.description} 完成`
@@ -2659,85 +2508,28 @@ const handleSkillComplete = async (result: { success: boolean; output?: string; 
                     size: response.output_file.size
                   }
                 }
-                closeSkillExecution(false)
               } else {
                 step.status = 'error'
                 step.output = response.error || '执行失败'
-              }
-            }
-
-            // 跳过后续的旧代码逻辑
-            return
-
-            // ========== 以下是旧的执行逻辑（已被跳过）==========
-            const response = await agentApi.execute({
-              skill_id: step.skillId,
-              params
-            })
-
-            console.log(`[handleSkillComplete] Response:`, response)
-
-            if (response.success) {
-              step.status = 'completed'
-              step.output = response.output || `✓ ${step.description} 完成`
-              if (response.output_file) {
-                step.outputFile = {
-                  type: response.output_file.type as OutputFile['type'],
-                  name: response.output_file.name,
-                  url: response.output_file.url,
-                  size: response.output_file.size
+                step.errorDetails = {
+                  error: response.error,
+                  output: response.output
                 }
-                openOutputFile(step.outputFile)
-              } else {
-                step.outputFile = generateOutputFile(step.skillName, step.description, step.output)
-                if (step.outputFile) openOutputFile(step.outputFile)
               }
-              // 记录到上下文（包含输出内容）
-              contextStore.recordSkillExecution(step.skillName, 'success', {
-                outputFile: step.outputFile ? {
-                  name: step.outputFile.name,
-                  type: step.outputFile.type,
-                  size: step.outputFile.size
-                } : undefined,
-                output: step.output
-              })
-            } else {
+            } catch (error: any) {
+              console.error('[handleSkillComplete] Execute error:', error)
               step.status = 'error'
-              // 构建完整的错误信息
-              const errorParts: string[] = []
-              if (response.error) {
-                errorParts.push(`错误: ${response.error}`)
-              }
-              if (response.output) {
-                errorParts.push(`输出: ${response.output}`)
-              }
-              step.output = '结果可能不符合预期'
-              step.errorDetails = {
-                error: response.error,
-                output: response.output
-              }
-              // 记录到上下文
-              contextStore.recordSkillExecution(step.skillName, 'error', {
-                errorMessage: response.error || '执行失败'
-              })
+              step.output = error.message || '执行失败'
             }
           } else {
-            // 没有 skillId，模拟执行
-            step.status = 'completed'
-            step.output = `⚠️ 技能 "${step.skillName}" 未关联，已模拟执行`
-            step.outputFile = generateOutputFile(step.skillName, step.description, step.output)
+            // 没有 skillId，跳过
+            step.status = 'error'
+            step.output = `技能 "${step.skillName}" 未安装`
           }
         } catch (error: any) {
-          console.error(`[handleSkillComplete] Error:`, error)
+          console.error('[handleSkillComplete] Error:', error)
           step.status = 'error'
-          step.output = `结果可能不符合预期`
-          step.errorDetails = {
-            error: error.message || '未知错误'
-          }
-          // 记录到上下文
-          contextStore.recordSkillExecution(step.skillName, 'error', {
-            errorMessage: error.message || '未知错误'
-          })
+          step.output = error.message || '执行失败'
         }
 
         scrollToBottom()
@@ -3678,7 +3470,8 @@ const executeSkills = async (messageId: number, skills: SkillStep[], startIndex:
 
         const response = await agentApi.execute({
           skill_id: step.skillId,
-          params
+          params,
+          agent_id: props.agentId
         })
 
         // 调试日志
@@ -4023,369 +3816,26 @@ const executeSkillsParallel = async (messageId: number) => {
 
           console.log(`[Skill Parallel] Executing "${step.skillName}" with params:`, params)
 
-          // ========== Claude Code 风格：使用交互式执行 ==========
-          // 打开右侧面板进行交互式执行
-          executingSkill.value = { name: step.skillName, icon: step.skillIcon, description: step.description }
-          executionContext.value = contextValue
-          executingStepInfo.value = { messageId, stepId: step.id }
+          // ========== 简化执行：直接调用API ==========
+          step.status = 'running'
+          step.output = '正在执行...'
 
-          // 初始化面板状态
-          skillPanelMessages.value = [{
-            id: Date.now(),
-            role: 'assistant',
-            content: `🚀 正在执行 **${step.skillName}**...\n\n${step.description || ''}`,
-            timestamp: new Date()
-          }]
-          skillPanelInput.value = ''
-          skillPanelProcessing.value = true
-          skillPanelComplete.value = false
-          skillPanelWaitingConfirm.value = false
-          skillChatConversation.value = []
-          pendingActions.value = []
-          currentActionIndex.value = 0
-          actionPending.value = false
-          autoExecuteAll.value = false
-          panelCollectedFilePaths.value = allFilePaths
-
-          showSkillExecution.value = true
-          scrollSkillPanelToBottom()
-
-          // ========== 真正的 Claude Code 风格：多轮 AI 交互 ==========
-          // 每个工具调用都等待用户确认
-
-          // 标记 Agent Loop 开始
-          isAgentLoopRunning.value = true
-
-          // 使用 Promise 保持等待状态，直到任务完成
-          await new Promise<void>((resolve, reject) => {
-            let lastOutputFile: OutputFile | null = null
-            let conversation: AgentLoopMessage[] = []
-            let pendingToolCall: ToolCall | null = null
-            let isCompleted = false
-
-            // Agent 循环函数
-            const runAgentLoop = async (
-              toolConfirmed: boolean = false,
-              toolRejected: boolean = false,
-              userEdit?: string
-            ): Promise<void> => {
-              if (isCompleted) return
-
-              const request: AgentLoopRequest = {
-                skill_id: step.skillId || '',
-                context: contextValue,
-                file_paths: allFilePaths.length > 0 ? allFilePaths : undefined,
-                conversation: conversation,
-                pending_tool_call: pendingToolCall || undefined,
-                tool_confirmed: toolConfirmed,
-                tool_rejected: toolRejected,
-                user_edit: userEdit
-              }
-
-              skillPanelProcessing.value = true
-
-              try {
-                // 检查是否请求停止
-                if (isStopRequested.value) {
-                  console.log('[Agent Loop] 检测到停止请求，终止')
-                  isCompleted = true
-                  resolve()
-                  return
-                }
-
-                console.log('[Agent Loop] 发送请求:', JSON.stringify(request, null, 2).substring(0, 500))
-                for await (const event of agentLoopApi.loop(request)) {
-                  // 每次收到事件都检查停止标志
-                  if (isStopRequested.value) {
-                    console.log('[Agent Loop] 检测到停止请求，中止循环')
-                    isCompleted = true
-                    resolve()
-                    return
-                  }
-
-                  console.log('[Agent Loop] 收到事件:', event.type, event)
-
-                  if (event.type === 'thinking') {
-                    // AI 正在思考
-                    skillPanelMessages.value.push({
-                      id: Date.now(),
-                      role: 'assistant',
-                      content: event.message || '● AI 正在思考...',
-                      timestamp: new Date(),
-                      isExecuting: true
-                    })
-                    scrollSkillPanelToBottom()
-
-                  } else if (event.type === 'message') {
-                    // AI 的文字消息
-                    const lastMsg = skillPanelMessages.value[skillPanelMessages.value.length - 1]
-                    if (lastMsg?.isExecuting) {
-                      lastMsg.isExecuting = false
-                      lastMsg.content = event.content || ''
-                    } else {
-                      skillPanelMessages.value.push({
-                        id: Date.now(),
-                        role: 'assistant',
-                        content: event.content || '',
-                        timestamp: new Date()
-                      })
-                    }
-                    // 保存到对话历史
-                    conversation.push({ role: 'assistant', content: event.content || '' })
-                    scrollSkillPanelToBottom()
-
-                  } else if (event.type === 'tool_call') {
-                    // AI 要调用工具，等待用户确认
-                    const lastMsg = skillPanelMessages.value[skillPanelMessages.value.length - 1]
-                    if (lastMsg?.isExecuting) {
-                      lastMsg.isExecuting = false
-                    }
-
-                    // 保存待确认的工具调用
-                    pendingToolCall = {
-                      tool: event.tool || '',
-                      params: event.params || {},
-                      display_name: event.display_name,
-                      preview: event.preview
-                    }
-
-                    // 显示工具调用确认
-                    skillPanelMessages.value.push({
-                      id: Date.now(),
-                      role: 'assistant',
-                      content: event.message || `● **${event.display_name}**\n  ⎿  等待确认...`,
-                      timestamp: new Date(),
-                      toolCall: pendingToolCall,
-                      waitingConfirm: true
-                    })
-                    skillPanelProcessing.value = false
-                    scrollSkillPanelToBottom()
-                    // 不 resolve，等待用户确认后继续
-                    return
-
-                  } else if (event.type === 'tool_executing') {
-                    // 工具执行中
-                    skillPanelMessages.value.push({
-                      id: Date.now(),
-                      role: 'assistant',
-                      content: event.message || '执行中...',
-                      timestamp: new Date(),
-                      isExecuting: true
-                    })
-                    scrollSkillPanelToBottom()
-
-                  } else if (event.type === 'tool_result') {
-                    // 工具执行结果
-                    const lastMsg = skillPanelMessages.value[skillPanelMessages.value.length - 1]
-                    if (lastMsg?.isExecuting) {
-                      lastMsg.isExecuting = false
-                      lastMsg.content = event.message || (event.success ? '完成' : '失败')
-                    }
-
-                    // 保存输出文件
-                    if (event.output_file) {
-                      console.log('[Agent Loop] 收到 output_file:', event.output_file)
-                      lastOutputFile = {
-                        type: event.output_file.type as OutputFile['type'],
-                        name: event.output_file.name,
-                        url: event.output_file.url,
-                        size: event.output_file.size?.toString()
-                      }
-                      step.outputFile = lastOutputFile
-                      console.log('[Agent Loop] 设置 lastOutputFile:', lastOutputFile)
-                    }
-
-                    // 保存到对话历史
-                    conversation.push({
-                      role: 'tool_result',
-                      content: JSON.stringify({ success: event.success, output: event.output })
-                    })
-
-                    // 清除待确认的工具调用
-                    pendingToolCall = null
-                    scrollSkillPanelToBottom()
-
-                  } else if (event.type === 'done') {
-                    // 任务完成
-                    isCompleted = true
-                    isAgentLoopRunning.value = false  // 允许关闭面板
-                    skillPanelProcessing.value = false
-                    skillPanelMessages.value.push({
-                      id: Date.now(),
-                      role: 'assistant',
-                      content: '🎉 任务完成！',
-                      timestamp: new Date()
-                    })
-
-                    // 更新主对话框中的步骤状态
-                    console.log('[Agent Loop] done 事件, lastOutputFile:', lastOutputFile)
-                    console.log('[Agent Loop] executingStepInfo:', executingStepInfo.value)
-                    step.status = 'completed'
-                    step.output = '执行完成'
-                    if (lastOutputFile) {
-                      step.outputFile = lastOutputFile
-                    }
-                    skillPanelComplete.value = true
-
-                    // 强制更新 Vue 响应式 - 使用新对象触发变更检测
-                    if (executingStepInfo.value) {
-                      const { messageId, stepId } = executingStepInfo.value
-                      const msgIndex = messages.value.findIndex(m => m.id === messageId)
-                      console.log('[Agent Loop] 更新消息, msgIndex:', msgIndex, 'messageId:', messageId, 'stepId:', stepId)
-                      if (msgIndex >= 0) {
-                        const msg = messages.value[msgIndex]
-                        if (msg?.skillPlan) {
-                          const updatedSkillPlan = msg.skillPlan.map(s => {
-                            if (s.id === stepId) {
-                              console.log('[Agent Loop] 更新步骤状态为 completed, outputFile:', lastOutputFile)
-                              return {
-                                ...s,
-                                status: 'completed' as const,
-                                output: '执行完成',
-                                outputFile: lastOutputFile || s.outputFile
-                              }
-                            }
-                            return s
-                          })
-                          // 替换整个消息对象以触发 Vue 响应式
-                          messages.value[msgIndex] = {
-                            ...msg,
-                            skillPlan: updatedSkillPlan
-                          }
-                          console.log('[Agent Loop] 消息更新完成')
-                        }
-                      }
-                    }
-
-                    // 如果有输出文件，打开预览
-                    if (lastOutputFile) {
-                      openOutputFile(lastOutputFile)
-                    }
-                    scrollSkillPanelToBottom()
-
-                    // 延迟关闭面板，让用户看到完成状态
-                    setTimeout(() => {
-                      resolve()
-                    }, 2000)
-                    return
-
-                  } else if (event.type === 'error') {
-                    // 错误
-                    isCompleted = true
-                    isAgentLoopRunning.value = false  // 允许关闭面板
-                    skillPanelProcessing.value = false
-                    const lastMsg = skillPanelMessages.value[skillPanelMessages.value.length - 1]
-                    if (lastMsg?.isExecuting) {
-                      lastMsg.isExecuting = false
-                    }
-                    skillPanelMessages.value.push({
-                      id: Date.now(),
-                      role: 'assistant',
-                      content: `❌ ${event.message}`,
-                      timestamp: new Date()
-                    })
-                    step.status = 'error'
-                    step.output = event.message || '执行失败'
-
-                    // 强制更新 Vue 响应式 - 使用新对象触发变更检测
-                    if (executingStepInfo.value) {
-                      const { messageId, stepId } = executingStepInfo.value
-                      const msgIndex = messages.value.findIndex(m => m.id === messageId)
-                      if (msgIndex >= 0) {
-                        const msg = messages.value[msgIndex]
-                        if (msg?.skillPlan) {
-                          const updatedSkillPlan = msg.skillPlan.map(s => {
-                            if (s.id === stepId) {
-                              return {
-                                ...s,
-                                status: 'error' as const,
-                                output: event.message || '执行失败'
-                              }
-                            }
-                            return s
-                          })
-                          messages.value[msgIndex] = {
-                            ...msg,
-                            skillPlan: updatedSkillPlan
-                          }
-                        }
-                      }
-                    }
-
-                    scrollSkillPanelToBottom()
-                    reject(new Error(event.message))  // 错误 Promise
-                    return
-                  }
-                }
-              } catch (error) {
-                console.error('[Agent Loop] Error:', error)
-                reject(error)
-              }
-            }
-
-            // 确认工具调用
-            const confirmTool = async () => {
-              try {
-                // 更新消息状态
-                const lastMsg = skillPanelMessages.value[skillPanelMessages.value.length - 1]
-                if (lastMsg?.waitingConfirm) {
-                  lastMsg.waitingConfirm = false
-                  lastMsg.content = lastMsg.content?.replace('等待确认...', '已确认') || '已确认'
-                }
-                console.log('[Agent Loop] 用户确认，继续执行...')
-                await runAgentLoop(true, false)
-              } catch (error) {
-                console.error('[Agent Loop] confirmTool error:', error)
-                // 不 reject，让用户可以重试
-              }
-            }
-
-            // 拒绝工具调用
-            const rejectTool = async () => {
-              try {
-                const lastMsg = skillPanelMessages.value[skillPanelMessages.value.length - 1]
-                if (lastMsg?.waitingConfirm) {
-                  lastMsg.waitingConfirm = false
-                  lastMsg.content = lastMsg.content?.replace('等待确认...', '已跳过') || '已跳过'
-                }
-                console.log('[Agent Loop] 用户拒绝，继续执行...')
-                await runAgentLoop(false, true)
-              } catch (error) {
-                console.error('[Agent Loop] rejectTool error:', error)
-              }
-            }
-
-            // 保存确认/拒绝函数到全局，供模板使用
-            ;(window as any).__agentLoopConfirm = confirmTool
-            ;(window as any).__agentLoopReject = rejectTool
-
-            // 开始 Agent 循环
-            runAgentLoop().catch(err => {
-              console.error('[Agent Loop] Initial runAgentLoop error:', err)
-              // 不 reject，避免面板关闭
-            })
-          })
-
-          // 跳过后面的旧代码
-          return
-
-          // ========== 以下是旧的执行逻辑（已被跳过）==========
+          // 【直接执行，不打开交互面板】
           const response = await agentApi.execute({
-            skill_id: step.skillId,
-            params
+            skill_id: step.skillId || '',
+            params: {
+              ...params,
+              agent_id: props.agentId
+            },
+            agent_id: props.agentId
           })
 
-          // 调试日志 - 打印完整响应结构
-          console.log(`[Skill Parallel] Response for "${step.skillName}":`, JSON.stringify(response, null, 2))
-          console.log(`[Skill Parallel] Response keys:`, Object.keys(response))
-          console.log(`[Skill Parallel] output_file present:`, 'output_file' in response)
-          console.log(`[Skill Parallel] output_file value:`, response.output_file)
+          console.log(`[Skill Parallel] Response for "${step.skillName}":`, response)
 
           if (response.success) {
             step.status = 'completed'
             step.output = response.output || `✓ ${step.description} 完成`
             if (response.output_file) {
-              console.log(`[Skill Parallel] Using backend output_file:`, response.output_file)
               const outputFile = {
                 type: response.output_file.type as OutputFile['type'],
                 name: response.output_file.name,
@@ -4393,46 +3843,18 @@ const executeSkillsParallel = async (messageId: number) => {
                 size: response.output_file.size
               }
               step.outputFile = outputFile
-              console.log(`[Skill Parallel] step.outputFile after assignment:`, step.outputFile)
-              // 自动展示预览
               openOutputFile(outputFile)
-            } else {
-              // 后端没有返回文件时，基于输出内容创建本地文件
-              console.log(`[Skill Parallel] No output_file in response, generating local md`)
-              step.outputFile = generateOutputFile(step.skillName, step.description, step.output)
-              // 自动展示预览
-              if (step.outputFile) openOutputFile(step.outputFile)
             }
-            console.log(`[Skill Parallel] Step ${step.id} final state: status=${step.status}, hasOutputFile=${!!step.outputFile}`)
-            // 记录到上下文（包含输出内容）
-            contextStore.recordSkillExecution(step.skillName, 'success', {
-              outputFile: step.outputFile ? {
-                name: step.outputFile.name,
-                type: step.outputFile.type,
-                size: step.outputFile.size
-              } : undefined,
-              output: step.output
-            })
           } else {
             step.status = 'error'
-            // 构建完整的错误信息
-            const errorParts: string[] = []
-            if (response.error) {
-              errorParts.push(`错误: ${response.error}`)
-            }
-            if (response.output) {
-              errorParts.push(`输出: ${response.output}`)
-            }
-            step.output = '结果可能不符合预期'
+            step.output = response.error || '执行失败'
             step.errorDetails = {
               error: response.error,
               output: response.output
             }
-            // 记录到上下文
-            contextStore.recordSkillExecution(step.skillName, 'error', {
-              errorMessage: response.error || '执行失败'
-            })
           }
+
+          // 【直接执行完成】
         } else {
           // 没有 skillId，说明技能未找到
           console.warn(`[Skill Execution] No skillId for "${step.skillName}", simulating...`)
@@ -5025,13 +4447,15 @@ const sendMessage = async () => {
     // 构建上下文
     const context = contextStore.toApiContext
 
-    // 调用后端 AI 聊天接口（流式）+ 打字机效果
+    // 调用后端 AI 聊天接口（流式）+ 打字机效果 + RAG
     for await (const chunk of agentApi.chatStream(
       {
         message: userInput,
         history,
         skill_ids: skillIds,
-        context: context.length > 0 ? context : undefined
+        context: context.length > 0 ? context : undefined,
+        agent_id: props.agentId,  // For RAG data isolation
+        enable_rag: true
       },
       abortController.signal
     )) {
@@ -5078,31 +4502,38 @@ const sendMessage = async () => {
         console.log('[Skill Plan] Plan data from AI:', planData)
         console.log('[Skill Plan] Skills count:', props.skills.length)
 
-        const skillPlan: SkillStep[] = planData.map((item: any, index: number) => {
-          // 检查技能是否存在 - 支持精确匹配和包含匹配
-          const skillNameFromAI = item.skill.toLowerCase().trim()
-          let existingSkill = props.skills.find(
-            s => s.name.toLowerCase() === skillNameFromAI
-          )
-          // 如果精确匹配失败，尝试包含匹配
-          if (!existingSkill) {
-            existingSkill = props.skills.find(
-              s => s.name.toLowerCase().includes(skillNameFromAI) ||
-                   skillNameFromAI.includes(s.name.toLowerCase())
+        // 只保留已安装的技能，过滤掉不存在的
+        const skillPlan: SkillStep[] = planData
+          .map((item: any, index: number) => {
+            // 检查技能是否存在 - 支持精确匹配和包含匹配
+            const skillNameFromAI = item.skill.toLowerCase().trim()
+            let existingSkill = props.skills.find(
+              s => s.name.toLowerCase() === skillNameFromAI
             )
-          }
-          console.log(`[Skill Plan] Matching "${item.skill}" (normalized: "${skillNameFromAI}") -> found:`, existingSkill ? { id: existingSkill.id, name: existingSkill.name } : 'NOT FOUND')
+            // 如果精确匹配失败，尝试包含匹配
+            if (!existingSkill) {
+              existingSkill = props.skills.find(
+                s => s.name.toLowerCase().includes(skillNameFromAI) ||
+                     skillNameFromAI.includes(s.name.toLowerCase())
+              )
+            }
+            console.log(`[Skill Plan] Matching "${item.skill}" -> found:`, existingSkill ? existingSkill.name : 'NOT FOUND (will be filtered)')
 
-          return {
-            id: index + 1,
-            skillId: existingSkill?.id,  // 数据库中的技能ID
-            nodeId: `node-${index + 1}`,
-            skillName: item.skill,
-            skillIcon: existingSkill?.icon || (item.exists ? '⚡' : '❓'),
-            description: item.action,
-            status: item.exists && existingSkill ? 'pending' : 'missing'
-          }
-        })
+            // 只返回已安装的技能
+            if (!existingSkill) return null
+
+            return {
+              id: index + 1,
+              skillId: existingSkill.id,
+              nodeId: `node-${index + 1}`,
+              skillName: existingSkill.name,  // 使用实际技能名
+              skillIcon: existingSkill.icon || '⚡',
+              description: item.action,
+              status: 'pending' as const
+            }
+          })
+          .filter((item): item is SkillStep => item !== null)  // 过滤掉不存在的
+          .map((item, index) => ({ ...item, id: index + 1, nodeId: `node-${index + 1}` }))  // 重新编号
 
         if (skillPlan.length > 0) {
           // 生成简单的线性边
@@ -9104,7 +8535,7 @@ const openInNewTab = (url: string) => {
   min-height: 20px;
 }
 
-/* 高亮层：显示带颜色的 @引用 */
+/* 高亮层：只显示 @引用 的背景高亮 */
 .textarea-highlight {
   position: absolute;
   top: 0;
@@ -9115,19 +8546,18 @@ const openInNewTab = (url: string) => {
   font-family: inherit;
   font-size: 13px;
   line-height: 1.5;
-  color: #111827;
+  color: transparent;  /* 普通文字透明 */
   white-space: pre-wrap;
   word-wrap: break-word;
   overflow: hidden;
   pointer-events: none;
 }
 
-/* @引用显示为标签样式（输入框内） */
+/* @引用显示背景高亮（文字由 textarea 显示） */
 .textarea-highlight :deep(.at-ref) {
   background: #dbeafe;
-  color: #1d4ed8;
+  color: transparent;  /* 文字透明，只显示背景 */
   border-radius: 3px;
-  font-weight: 500;
 }
 
 /* @引用显示为标签样式（对话框内） */
@@ -9147,7 +8577,7 @@ const openInNewTab = (url: string) => {
   background: transparent;
   border: none;
   outline: none;
-  color: transparent;
+  color: #111827;  /* 显示原生文字 */
   caret-color: #111827;
   font-family: inherit;
   font-size: 13px;

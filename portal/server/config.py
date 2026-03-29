@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     skills_storage_dir: str = str(SERVER_DIR / "skills_storage")
     skills_storage_temp_dir: str = str(SERVER_DIR / "skills_storage_temp")
 
+    # Vector Database (PostgreSQL + pgvector)
+    vector_db_url: str = "postgresql://pguser:Password.123@8.153.198.194:8092/pgdb"
+
     @property
     def database_url(self) -> str:
         return f"mysql+pymysql://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"

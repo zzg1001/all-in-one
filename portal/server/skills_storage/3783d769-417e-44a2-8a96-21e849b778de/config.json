@@ -1,0 +1,22 @@
+{
+  "name": "消防商机筛选器",
+  "description": "从招标信息Excel中筛选出与消防相关的销售商机。支持寻标宝等招标平台导出的Excel格式，自动识别消防、灭火、火灾报警、防火等关键词。",
+  "icon": "fire",
+  "tags": [
+    "消防",
+    "招标",
+    "Excel",
+    "筛选",
+    "商机"
+  ],
+  "author": "AI Skills Platform",
+  "version": "1.0.0",
+  "exec_mode": "direct",
+  "entry_script": "main.py",
+  "output_config": {
+    "enabled": true,
+    "description": "筛选后的消防相关商机Excel文件",
+    "preferred_type": "xlsx",
+    "filename_template": "消防商机筛选结果_{timestamp}"
+  }
+}

@@ -10,6 +10,7 @@ from routers.favorites import router as favorites_router
 from routers.logs import router as logs_router, setup_log_handler, sys_ready
 from routers.agents import router as agents_router
 from routers.agent_modules import router as agent_modules_router
+from routers.agent_v2 import router as agent_v2_router  # SDK 版本
 from config import get_outputs_dir, get_uploads_dir
 
 # 使用配置的路径（目录会自动创建）
@@ -54,6 +55,7 @@ app.include_router(logs_router)
 app.include_router(chat_router)
 app.include_router(agents_router)
 app.include_router(agent_modules_router)
+app.include_router(agent_v2_router)  # SDK 版本 API
 
 # 静态文件服务 - 输出文件下载
 app.mount("/outputs", StaticFiles(directory=str(OUTPUTS_DIR)), name="outputs")

@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref } from 'vue'
 import config from '@/config'
 
 const props = defineProps<{ show: boolean }>()
 const emit = defineEmits<{ 'update:show': [value: boolean] }>()
 
-const connected = ref(false)
+const connected = ref(true)  // 默认显示为已连接，打开日志窗口时会通过 WebSocket 检测
 const logCount = ref(0)
 let logWindow: Window | null = null
 
@@ -219,37 +219,8 @@ body{background:#0a0a0a;font-family:'Cascadia Code','Fira Code','SF Mono',Monaco
   emit('update:show', true)
 }
 
-// 状态检测 - 使用 HTTP 轮询代替 WebSocket
-let statusCheckTimer: ReturnType<typeof setInterval> | null = null
-let isUnmounted = false
-
-const checkConnection = async () => {
-  try {
-    const response = await fetch(`${config.serverBaseUrl}/api/logs/recent?limit=1`)
-    connected.value = response.ok
-  } catch {
-    connected.value = false
-  }
-}
-
-onMounted(() => {
-  isUnmounted = false
-  // 立即检查一次
-  checkConnection()
-  // 每 10 秒检查一次连接状态
-  statusCheckTimer = setInterval(() => {
-    if (!isUnmounted) checkConnection()
-  }, 10000)
-})
-
-onUnmounted(() => {
-  isUnmounted = true
-  // 清理定时器
-  if (statusCheckTimer) {
-    clearInterval(statusCheckTimer)
-    statusCheckTimer = null
-  }
-})
+// 连接状态（仅在打开日志窗口时才检测）
+// 已移除轮询检测，避免不必要的网络请求
 </script>
 
 <template>

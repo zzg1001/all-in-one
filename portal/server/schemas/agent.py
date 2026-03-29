@@ -11,6 +11,8 @@ class ChatRequest(BaseModel):
     message: str
     history: Optional[List[Message]] = []
     skill_ids: Optional[List[str]] = None  # Available skills for this conversation
+    agent_id: Optional[str] = None  # Agent ID for RAG data isolation
+    enable_rag: bool = True  # Enable RAG retrieval from vector database
 
 
 class ChatResponse(BaseModel):
@@ -39,6 +41,7 @@ class ExecuteRequest(BaseModel):
     skill_id: str  # UUID
     script_name: Optional[str] = None  # If not specified, use entry_script
     params: Optional[Dict[str, Any]] = {}
+    agent_id: Optional[str] = None  # Agent ID for RAG data isolation
 
 
 class OutputFile(BaseModel):
@@ -106,6 +109,7 @@ class SkillChatRequest(BaseModel):
     user_choice: Optional[str] = None  # 用户选择（execute/skip/edit）
     pending_actions: Optional[List[SkillChatAction]] = None  # 待执行的操作列表
     current_action_index: int = 0  # 当前操作索引
+    agent_id: Optional[str] = None  # Agent ID for RAG data isolation
 
 
 class SkillExecuteInteractiveRequest(BaseModel):
