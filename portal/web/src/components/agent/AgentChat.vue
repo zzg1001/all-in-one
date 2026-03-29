@@ -4376,7 +4376,36 @@ const sendMessage = async () => {
     }))
 
   // 所有需要发送给 AI 的文件（包含上传的文件和 @ 引用的文件）
-  const allFilesForAI: MessageAttachment[] = [...displayAttachments, ...refAttachments]
+  let allFilesForAI: MessageAttachment[] = [...displayAttachments, ...refAttachments]
+
+  // 如果没有上传文件也没有 @ 引用的文件，自动从 File Manage 获取文件
+  // 直接把 File Manage 的文件路径放到 inlineRefs 中，和 @ 引用一样
+  if (allFilesForAI.length === 0) {
+    try {
+      // 直接获取所有 File Manage 文件（不限制 agent_id）
+      const allNotes = await dataNotesApi.getAll({ parentId: 'all' })
+      console.log('[sendMessage] File Manage 所有文件:', allNotes)
+
+      for (const note of allNotes) {
+        // 只要有 file_url 就添加（跳过文件夹）
+        if (note.file_url && note.file_type !== 'folder') {
+          const attachment: MessageAttachment = {
+            id: `fm-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            name: note.name,
+            type: note.file_type,
+            size: parseInt(note.file_size || '0') || 0,
+            serverPath: note.file_url  // 直接使用 file_url 作为 serverPath
+          }
+          allFilesForAI.push(attachment)
+          refAttachments.push(attachment)
+          console.log(`[sendMessage] 添加 File Manage 文件: ${note.name} -> ${note.file_url}`)
+        }
+      }
+      console.log(`[sendMessage] File Manage 文件总数: ${allFilesForAI.length}`)
+    } catch (e) {
+      console.warn('[sendMessage] 获取 File Manage 文件失败:', e)
+    }
+  }
 
   // 构建消息内容
   let messageContent = inputText.value.trim()
