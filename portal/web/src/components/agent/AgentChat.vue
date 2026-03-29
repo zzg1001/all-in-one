@@ -359,7 +359,7 @@ const togglePreviewFullscreen = () => {
 }
 
 // 浮动按钮拖动
-const floatingActionsPos = ref({ x: -100, y: 8 })
+const floatingActionsPos = ref({ x: -140, y: 8 })
 const isDraggingFloating = ref(false)
 const dragStartPos = ref({ x: 0, y: 0 })
 
@@ -385,6 +385,63 @@ const stopDragFloating = () => {
   isDraggingFloating.value = false
   document.removeEventListener('mousemove', onDragFloating)
   document.removeEventListener('mouseup', stopDragFloating)
+}
+
+// 预览面板宽度调整
+const previewPanelWidth = ref(480)
+const isResizingPanel = ref(false)
+const resizeStartX = ref(0)
+const resizeStartWidth = ref(0)
+
+const startResizePanel = (e: MouseEvent) => {
+  isResizingPanel.value = true
+  resizeStartX.value = e.clientX
+  resizeStartWidth.value = previewPanelWidth.value
+  document.addEventListener('mousemove', onResizePanel)
+  document.addEventListener('mouseup', stopResizePanel)
+  e.preventDefault()
+}
+
+const onResizePanel = (e: MouseEvent) => {
+  if (!isResizingPanel.value) return
+  const delta = resizeStartX.value - e.clientX
+  const newWidth = resizeStartWidth.value + delta
+  previewPanelWidth.value = Math.max(320, Math.min(900, newWidth))
+}
+
+const stopResizePanel = () => {
+  isResizingPanel.value = false
+  document.removeEventListener('mousemove', onResizePanel)
+  document.removeEventListener('mouseup', stopResizePanel)
+}
+
+// 全屏模式下的浮动按钮位置（左下角）
+const fullscreenFloatingPos = ref({ x: 20, y: window.innerHeight - 60 })
+const isDraggingFullscreenFloating = ref(false)
+const fullscreenDragStartPos = ref({ x: 0, y: 0 })
+
+const startDragFullscreenFloating = (e: MouseEvent) => {
+  isDraggingFullscreenFloating.value = true
+  fullscreenDragStartPos.value = {
+    x: e.clientX - fullscreenFloatingPos.value.x,
+    y: e.clientY - fullscreenFloatingPos.value.y
+  }
+  document.addEventListener('mousemove', onDragFullscreenFloating)
+  document.addEventListener('mouseup', stopDragFullscreenFloating)
+}
+
+const onDragFullscreenFloating = (e: MouseEvent) => {
+  if (!isDraggingFullscreenFloating.value) return
+  fullscreenFloatingPos.value = {
+    x: e.clientX - fullscreenDragStartPos.value.x,
+    y: e.clientY - fullscreenDragStartPos.value.y
+  }
+}
+
+const stopDragFullscreenFloating = () => {
+  isDraggingFullscreenFloating.value = false
+  document.removeEventListener('mousemove', onDragFullscreenFloating)
+  document.removeEventListener('mouseup', stopDragFullscreenFloating)
 }
 
 // 点击外部关闭预览面板
@@ -5671,12 +5728,14 @@ const openInNewTab = (url: string) => {
       </div>
 
       <!-- 右侧结果预览面板 -->
-      <div v-show="showPreviewPanel" ref="previewPanelRef" class="preview-panel" :class="{ 'is-fullscreen': isPreviewFullscreen }">
+      <div v-show="showPreviewPanel" ref="previewPanelRef" class="preview-panel" :class="{ 'is-fullscreen': isPreviewFullscreen }" :style="isPreviewFullscreen ? {} : { width: previewPanelWidth + 'px' }">
+        <!-- 左侧拖拽调整宽度 -->
+        <div class="preview-resize-handle" @mousedown="startResizePanel"></div>
         <!-- 浮动操作按钮 -->
         <div
           class="preview-floating-actions"
-          :style="{ left: floatingActionsPos.x + 'px', top: floatingActionsPos.y + 'px' }"
-          @mousedown="startDragFloating"
+          :style="isPreviewFullscreen ? { left: fullscreenFloatingPos.x + 'px', top: fullscreenFloatingPos.y + 'px' } : { left: floatingActionsPos.x + 'px', top: floatingActionsPos.y + 'px' }"
+          @mousedown="isPreviewFullscreen ? startDragFullscreenFloating($event) : startDragFloating($event)"
         >
           <button class="floating-btn" @click.stop="downloadCurrentFile" title="下载">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -6319,7 +6378,7 @@ const openInNewTab = (url: string) => {
   flex-direction: column;
   align-items: center;
   padding: 6px 14px;
-  background: rgba(255,255,255,0.15);
+  background: rgba(0, 0, 0, 0.25);
   border-radius: 8px;
 }
 
@@ -8954,17 +9013,17 @@ const openInNewTab = (url: string) => {
   transform: scale(0.9);
 }
 
-/* Header Action Button - 清空对话 */
+/* Header Action Button - 新会话 */
 .header-action-btn {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
   padding: 6px 12px;
-  background: rgba(255, 255, 255, 0.15);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(0, 0, 0, 0.15);
   border-radius: 8px;
-  color: rgba(255, 255, 255, 0.9);
+  color: #fff;
   font-size: 11px;
   font-weight: 500;
   cursor: pointer;
@@ -8973,8 +9032,8 @@ const openInNewTab = (url: string) => {
 }
 
 .header-action-btn:hover {
-  background: rgba(255, 255, 255, 0.25);
-  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(0, 0, 0, 0.35);
+  border-color: rgba(0, 0, 0, 0.25);
   color: #fff;
 }
 
@@ -10075,9 +10134,8 @@ const openInNewTab = (url: string) => {
 /* ==================== 右侧结果预览面板 ==================== */
 .preview-panel {
   position: relative;
-  width: 480px;
   min-width: 320px;
-  max-width: 600px;
+  max-width: 900px;
   height: 100%;
   background: #fff;
   border-left: 1px solid #e5e7eb;
@@ -10085,7 +10143,27 @@ const openInNewTab = (url: string) => {
   flex-direction: column;
   flex-shrink: 0;
   box-shadow: -4px 0 16px rgba(0, 0, 0, 0.05);
-  transition: all 0.2s ease;
+}
+
+/* 左侧拖拽调整宽度把手 */
+.preview-resize-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 6px;
+  height: 100%;
+  cursor: ew-resize;
+  background: transparent;
+  z-index: 20;
+  transition: background 0.2s;
+}
+
+.preview-resize-handle:hover {
+  background: rgba(99, 102, 241, 0.3);
+}
+
+.preview-resize-handle:active {
+  background: rgba(99, 102, 241, 0.5);
 }
 
 /* 全屏模式 */
@@ -10216,42 +10294,47 @@ const openInNewTab = (url: string) => {
   width: 100%;
   border-collapse: collapse;
   font-size: 12px;
+  border: 2px solid #d1d5db;
+  border-radius: 4px;
+  overflow: hidden;
 }
 
 .preview-table th {
   position: sticky;
   top: 0;
-  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-  padding: 5px 8px;
-  text-align: left;
+  background: #e0f2fe;
+  padding: 6px 10px;
+  text-align: center;
   font-weight: 600;
-  font-size: 11px;
-  color: #374151;
-  border-bottom: 1px solid #e2e8f0;
+  font-size: 12px;
+  color: #0369a1;
+  border: 1px solid #bae6fd;
   white-space: nowrap;
 }
 
 .preview-table td {
-  padding: 4px 8px;
-  border-bottom: 1px solid #f1f5f9;
-  color: #4b5563;
-  font-size: 11px;
+  padding: 8px 12px;
+  border: 1px solid #d1d5db;
+  color: #374151;
+  font-size: 12px;
   max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: center;
+  background: #fff;
 }
 
-.preview-table tbody tr:hover {
-  background: #f8fafc;
+.preview-table tbody tr:hover td {
+  background: #eef2ff;
 }
 
-.preview-table tbody tr:nth-child(even) {
-  background: #fafafa;
+.preview-table tbody tr:nth-child(even) td {
+  background: #f9fafb;
 }
 
-.preview-table tbody tr:nth-child(even):hover {
-  background: #f1f5f9;
+.preview-table tbody tr:nth-child(even):hover td {
+  background: #eef2ff;
 }
 
 /* 代码预览 */
