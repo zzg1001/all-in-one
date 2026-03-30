@@ -1,56 +1,48 @@
 """
 Admin API Configuration
+共享 deploy.env 统一配置
 """
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 from typing import List
+from pathlib import Path
+from dotenv import load_dotenv
 import json
+
+# 目录
+SERVER_DIR = Path(__file__).parent.parent.parent  # admin/server
+PROJECT_ROOT = SERVER_DIR.parent.parent  # all-in-one 根目录
+
+# 按优先级加载配置: .env > deploy.env
+load_dotenv(SERVER_DIR / ".env")
+load_dotenv(PROJECT_ROOT / "deploy.env")
 
 
 class Settings(BaseSettings):
-    # Server
-    admin_api_url: str = "http://127.0.0.1:8001/api"
-
-    @property
-    def server_host(self) -> str:
-        from urllib.parse import urlparse
-        parsed = urlparse(self.admin_api_url)
-        return parsed.hostname or "127.0.0.1"
-
-    @property
-    def server_port(self) -> int:
-        from urllib.parse import urlparse
-        parsed = urlparse(self.admin_api_url)
-        return parsed.port or 8001
-
-    # Environment
-    env: str = "development"
-    debug: bool = True
-
-    # Database (共享 Portal 的数据库)
+    # Database (与 Portal 共享)
     db_host: str = "localhost"
     db_port: int = 3306
     db_user: str = "root"
     db_password: str = ""
-    db_name: str = "product_background"
+    db_name: str = "ai_agent"
+
+    # Environment
+    debug: bool = False
 
     # JWT Auth
-    secret_key: str = "your-secret-key-change-in-production"
+    secret_key: str = "change-this-to-random-string"
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
 
-    # CORS
-    cors_origins_str: str = '["http://localhost:5174"]'
-
-    # Portal API (用于跨服务调用)
-    portal_api_url: str = "http://localhost:8000/api"
+    # CORS (生产环境自动允许所有)
+    cors_origins_str: str = '["*"]'
 
     @property
     def cors_origins(self) -> List[str]:
         try:
             return json.loads(self.cors_origins_str)
         except json.JSONDecodeError:
-            return ["http://localhost:5174"]
+            return ["*"]
 
     @property
     def database_url(self) -> str:

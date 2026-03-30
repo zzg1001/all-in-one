@@ -4,51 +4,54 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
-
 # 服务器根目录
 SERVER_DIR = Path(__file__).parent
+PROJECT_ROOT = SERVER_DIR.parent.parent  # all-in-one 根目录
+
+# 按优先级加载配置: .env > ../../../deploy.env
+load_dotenv(SERVER_DIR / ".env")
+load_dotenv(PROJECT_ROOT / "deploy.env")
 
 
 class Settings(BaseSettings):
-    # Server
-    portal_api_url: str = "http://127.0.0.1:8000/api"
-
-    @property
-    def server_host(self) -> str:
-        from urllib.parse import urlparse
-        parsed = urlparse(self.portal_api_url)
-        return parsed.hostname or "127.0.0.1"
-
-    @property
-    def server_port(self) -> int:
-        from urllib.parse import urlparse
-        parsed = urlparse(self.portal_api_url)
-        return parsed.port or 8000
-
     # Database
     db_host: str = "localhost"
     db_port: int = 3306
     db_user: str = "root"
     db_password: str = ""
-    db_name: str = "product_background"
+    db_name: str = "ai_agent"
 
     # Claude AI
     anthropic_api_key: str = ""
-    anthropic_base_url: str = ""  # Azure proxy URL
+    anthropic_base_url: str = ""
     claude_model: str = "claude-opus-4-5"
 
     # App
-    debug: bool = True
+    debug: bool = False
 
-    # Storage Paths (可配置，将来可指向文件系统)
-    outputs_dir: str = str(SERVER_DIR / "outputs")
-    uploads_dir: str = str(SERVER_DIR / "uploads")
-    skills_storage_dir: str = str(SERVER_DIR / "skills_storage")
-    skills_storage_temp_dir: str = str(SERVER_DIR / "skills_storage_temp")
+    # Storage Paths (默认使用相对路径，无需配置)
+    outputs_dir: str = ""
+    uploads_dir: str = ""
+    skills_storage_dir: str = ""
+    skills_storage_temp_dir: str = ""
 
-    # Vector Database (PostgreSQL + pgvector)
-    vector_db_url: str = "postgresql://pguser:Password.123@8.153.198.194:8092/pgdb"
+    # Vector Database
+    vector_db_url: str = ""
+
+    # JWT (用于 Admin)
+    secret_key: str = "change-this-to-random-string"
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # 如果未配置路径，使用默认相对路径
+        if not self.outputs_dir:
+            self.outputs_dir = str(SERVER_DIR / "outputs")
+        if not self.uploads_dir:
+            self.uploads_dir = str(SERVER_DIR / "uploads")
+        if not self.skills_storage_dir:
+            self.skills_storage_dir = str(SERVER_DIR / "skills_storage")
+        if not self.skills_storage_temp_dir:
+            self.skills_storage_temp_dir = str(SERVER_DIR / "skills_storage_temp")
 
     @property
     def database_url(self) -> str:

@@ -18,12 +18,69 @@ from claude_agent_sdk import (
 
 from sqlalchemy.orm import Session
 from models.skill import Skill
-from config import get_settings, get_outputs_dir, get_uploads_dir, get_skills_storage_dir
+from config import get_settings, get_outputs_dir, get_uploads_dir, get_skills_storage_dir, get_server_dir
 
 # 路径常量
+SERVER_DIR = get_server_dir()
 OUTPUTS_DIR = get_outputs_dir()
 UPLOADS_DIR = get_uploads_dir()
 SKILLS_STORAGE_DIR = get_skills_storage_dir()
+
+
+def _resolve_file_path(file_path: str) -> str:
+    """
+    将 URL 路径或相对路径转换为完整的文件系统路径
+
+    这样 skill 不需要处理路径解析，直接使用完整路径即可
+    """
+    if not file_path:
+        return file_path
+
+    # 如果已经是完整路径且文件存在，直接返回
+    p = Path(file_path)
+    if p.is_absolute() and p.exists():
+        return file_path
+
+    # 处理 /uploads/xxx 格式的路径
+    if file_path.startswith('/uploads/') or file_path.startswith('\\uploads\\'):
+        filename = file_path.replace('/uploads/', '').replace('\\uploads\\', '')
+        full_path = UPLOADS_DIR / filename
+        if full_path.exists():
+            return str(full_path)
+
+    # 处理 /outputs/xxx 格式的路径
+    if file_path.startswith('/outputs/') or file_path.startswith('\\outputs\\'):
+        filename = file_path.replace('/outputs/', '').replace('\\outputs\\', '')
+        full_path = OUTPUTS_DIR / filename
+        if full_path.exists():
+            return str(full_path)
+
+    # 尝试在 uploads 目录查找（处理只有文件名的情况）
+    uploads_path = UPLOADS_DIR / Path(file_path).name
+    if uploads_path.exists():
+        return str(uploads_path)
+
+    # 返回原始路径
+    return file_path
+
+
+def _resolve_params_paths(params: dict) -> dict:
+    """
+    解析 params 中的所有文件路径
+
+    将 file_path, file_paths 中的 URL 路径转换为完整路径
+    """
+    resolved = params.copy()
+
+    # 解析 file_path
+    if resolved.get("file_path"):
+        resolved["file_path"] = _resolve_file_path(resolved["file_path"])
+
+    # 解析 file_paths 列表
+    if resolved.get("file_paths"):
+        resolved["file_paths"] = [_resolve_file_path(fp) for fp in resolved["file_paths"]]
+
+    return resolved
 
 
 # ==================== 自定义工具定义 ====================
@@ -108,13 +165,9 @@ async def read_uploaded_file_tool(args):
     """读取上传的文件"""
     file_path = args.get("file_path", "")
 
-    # 解析路径
-    if file_path.startswith('/uploads/'):
-        full_path = UPLOADS_DIR / file_path[len('/uploads/'):]
-    elif file_path.startswith('uploads/'):
-        full_path = UPLOADS_DIR / file_path[len('uploads/'):]
-    else:
-        full_path = Path(file_path)
+    # 使用统一的路径解析
+    resolved_path = _resolve_file_path(file_path)
+    full_path = Path(resolved_path)
 
     if not full_path.exists():
         return {
@@ -414,16 +467,10 @@ class AgentServiceV2:
                             import subprocess
                             import sys
 
-                            # 获取输入文件
+                            # 获取输入文件（使用统一的路径解析）
                             input_file = None
                             if file_paths:
-                                fp = file_paths[0]
-                                if fp.startswith('/uploads/'):
-                                    input_file = str(UPLOADS_DIR / fp[len('/uploads/'):])
-                                elif fp.startswith('uploads/'):
-                                    input_file = str(UPLOADS_DIR / fp[len('uploads/'):])
-                                else:
-                                    input_file = fp
+                                input_file = _resolve_file_path(file_paths[0])
 
                             if not input_file:
                                 yield json.dumps({"type": "error", "message": "请上传文件"})
@@ -529,10 +576,28 @@ class AgentServiceV2:
         if main_script.exists():
             print(f"[AgentServiceV2] 直接执行 main.py: {main_script}")
 
+            # ========== 关键：后端解析所有路径 ==========
+            # 这样 skill 不需要处理 /uploads/xxx 格式，直接拿到完整路径
+            resolved_params = _resolve_params_paths(params)
+
+            # 注入路径配置到 params（供 skill 使用输出目录等）
+            params_with_config = {
+                **resolved_params,
+                "_config": {
+                    "server_dir": str(SERVER_DIR),
+                    "outputs_dir": str(OUTPUTS_DIR),
+                    "uploads_dir": str(UPLOADS_DIR),
+                    "skills_storage_dir": str(SKILLS_STORAGE_DIR),
+                    "skill_folder": str(skill_folder)
+                }
+            }
+
+            print(f"[AgentServiceV2] 解析后的文件路径: file_path={params_with_config.get('file_path')}")
+
             try:
-                # 执行 main.py
+                # 执行 main.py，传递包含配置的参数
                 result = subprocess.run(
-                    [sys.executable, str(main_script), json.dumps(params)],
+                    [sys.executable, str(main_script), json.dumps(params_with_config)],
                     capture_output=True,
                     timeout=180,
                     cwd=str(skill_folder),
