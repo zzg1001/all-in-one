@@ -20,9 +20,9 @@ services:
     env_file:
       - ./deploy.env
     volumes:
-      - ./data/skills_storage:/app/skills_storage
-      - ./data/outputs:/app/outputs
-      - ./data/uploads:/app/uploads
+      - /opt/all-in-one/portal/server/skills_storage:/app/skills_storage
+      - /opt/all-in-one/portal/server/outputs:/app/outputs
+      - /opt/all-in-one/portal/server/uploads:/app/uploads
     networks:
       - app-network
 
