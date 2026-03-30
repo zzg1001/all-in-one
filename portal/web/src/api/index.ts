@@ -1216,6 +1216,7 @@ export interface FolderCreate {
   name: string
   parent_id?: string
   item_ids: string[]
+  agent_id?: string  // 关联的 Agent ID
 }
 
 export const dataNotesApi = {

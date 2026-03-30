@@ -4,6 +4,7 @@ import { dataNotesApi } from '@/api'
 
 const props = defineProps<{
   departmentName?: string
+  agentId?: string
 }>()
 
 const noteCount = ref(0)
@@ -14,19 +15,20 @@ let hideTimeout: number | null = null
 const loadNoteCount = async () => {
   try {
     if (props.departmentName) {
-      // 查找部门文件夹
+      // 查找部门文件夹（根目录不按 agentId 过滤，兼容旧数据）
       const allNotes = await dataNotesApi.getAll({ parentId: null })
       const folder = allNotes.find(
         n => n.file_type === 'folder' && n.name === props.departmentName
       )
       if (folder) {
-        // 获取文件夹内的文件数
-        const folderNotes = await dataNotesApi.getAll({ parentId: folder.id })
+        // 获取文件夹内的文件数（文件夹内部按 agentId 过滤）
+        const folderNotes = await dataNotesApi.getAll({ parentId: folder.id, agentId: props.agentId })
         noteCount.value = folderNotes.length
       } else {
         noteCount.value = 0
       }
     } else {
+      // 非部门模式，不过滤
       const notes = await dataNotesApi.getAll({ parentId: null })
       noteCount.value = notes.length
     }
@@ -146,7 +148,7 @@ defineExpose({ refresh: loadNoteCount })
         @mouseleave="handleModalLeave"
         @click="handleModalClick"
       >
-        <DataNotesModal :department-name="props.departmentName" @close="handleClose" />
+        <DataNotesModal :department-name="props.departmentName" :agent-id="props.agentId" @close="handleClose" />
       </div>
     </Transition>
   </Teleport>

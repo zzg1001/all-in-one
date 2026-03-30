@@ -1,0 +1,23 @@
+{
+  "skill_name": "finance-report",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "帮我用这个Excel生成财务分析报告",
+      "expected_output": "生成包含Executive Summary、关键指标、收入趋势、产品线分析、部门费用、现金流的PDF报告",
+      "files": ["财务数据.xlsx"]
+    },
+    {
+      "id": 2,
+      "prompt": "我需要一份月度财务报表，要有图表和表格，输出PDF",
+      "expected_output": "生成专业的财务月报PDF，包含柱状图、饼图、折线图和多个数据表格",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "分析一下各部门的预算执行情况，对比预算和实际支出",
+      "expected_output": "生成部门费用分析报告，包含预算vs实际对比图表和完成率表格",
+      "files": ["部门费用数据.xlsx"]
+    }
+  ]
+}

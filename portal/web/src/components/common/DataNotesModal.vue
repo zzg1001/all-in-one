@@ -5,6 +5,7 @@ import config from '@/config'
 
 const props = defineProps<{
   departmentName?: string
+  agentId?: string
 }>()
 
 const emit = defineEmits<{ close: [] }>()
@@ -91,7 +92,7 @@ let lastInitDepartment = ''
 
 // 初始化部门文件夹（如果有部门名称，自动创建文件夹，但不自动进入）
 const initDepartmentFolder = async () => {
-  console.log('[initDepartmentFolder] departmentName:', props.departmentName)
+  console.log('[initDepartmentFolder] departmentName:', props.departmentName, 'agentId:', props.agentId)
 
   if (!props.departmentName) {
     departmentFolderId.value = null
@@ -110,7 +111,7 @@ const initDepartmentFolder = async () => {
   lastInitDepartment = props.departmentName
 
   try {
-    // 查找是否已有该部门的文件夹
+    // 查找是否已有该部门的文件夹（根目录不按 agentId 过滤，兼容旧数据）
     const allNotes = await dataNotesApi.getAll({ parentId: null })
     console.log('[initDepartmentFolder] 根目录文件夹:', allNotes.filter(n => n.file_type === 'folder').map(n => ({ id: n.id, name: n.name })))
 
@@ -124,11 +125,12 @@ const initDepartmentFolder = async () => {
       console.log('[initDepartmentFolder] 使用现有文件夹')
     } else {
       console.log('[initDepartmentFolder] 未找到，准备创建...')
-      // 创建部门文件夹（后端会检查重复）
+      // 创建部门文件夹（关联到当前 Agent）
       const newFolder = await dataNotesApi.createFolder({
         name: props.departmentName,
         parent_id: undefined,
-        item_ids: []
+        item_ids: [],
+        agent_id: props.agentId
       })
       console.log('[initDepartmentFolder] 创建/返回文件夹:', newFolder.id, newFolder.name)
       departmentFolderId.value = newFolder.id
@@ -164,12 +166,17 @@ const canUpload = computed(() => {
   return !isAtDepartmentRoot.value
 })
 
-// 加载便签
+// 加载便签（按 agentId 隔离，但根目录的部门文件夹不过滤）
 const loadNotes = async () => {
   isLoading.value = true
   try {
+    // 在根目录查询部门文件夹时，不按 agentId 过滤（兼容旧数据）
+    // 只有进入文件夹内部后才按 agentId 过滤
+    const shouldFilterByAgent = currentFolderId.value !== null
+
     let allNotes = await dataNotesApi.getAll({
-      parentId: currentFolderId.value
+      parentId: currentFolderId.value,
+      agentId: shouldFilterByAgent ? props.agentId : undefined
     })
 
     // 如果在根目录且有部门名称，只显示当前部门的文件夹
@@ -220,13 +227,14 @@ const toggleSelect = (id: string) => {
   selectedIds.value = new Set(selectedIds.value)
 }
 
-// 创建文件夹（直接创建，默认名"未知"）
+// 创建文件夹（直接创建，默认名"未知"，关联到当前 Agent）
 const createFolder = async () => {
   try {
     const folder = await dataNotesApi.createFolder({
       name: '未知',
       parent_id: currentFolderId.value || undefined,
-      item_ids: Array.from(selectedIds.value)
+      item_ids: Array.from(selectedIds.value),
+      agent_id: props.agentId
     })
     selectedIds.value.clear()
     selectedIds.value = new Set()
@@ -557,14 +565,15 @@ const uploadFiles = async (files: File[]) => {
         const data = await res.json()
 
         if (data.url) {
-          // 创建便签
+          // 创建便签（关联到当前 Agent）
           const ext = file.name.split('.').pop()?.toLowerCase() || ''
           const newNote = await dataNotesApi.create({
             name: file.name,
             file_type: ext,
             file_url: data.url,
             file_size: formatFileSize(file.size),
-            parent_id: currentFolderId.value || undefined
+            parent_id: currentFolderId.value || undefined,
+            agent_id: props.agentId
           })
           notes.value.unshift(newNote)
           successCount++

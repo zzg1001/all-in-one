@@ -481,6 +481,213 @@ class AgentServiceV2:
             yield chunk
 
 
+    async def execute_skill(
+        self,
+        skill_id: str,
+        params: Dict[str, Any] = None,
+    ) -> Dict[str, Any]:
+        """
+        使用 Claude Agent SDK 执行技能
+
+        AI 会根据 SKILL.md 的指示，使用 Bash 工具执行脚本生成输出文件
+
+        Args:
+            skill_id: 技能 UUID
+            params: 包含 file_path, file_paths, context 等参数
+
+        Returns:
+            执行结果字典
+        """
+        import subprocess
+        import sys
+        import time
+
+        params = params or {}
+        skill = self.db.query(Skill).filter(Skill.id == skill_id).first()
+
+        if not skill:
+            return {
+                "success": False,
+                "error": "技能不存在",
+                "output": None,
+                "result": None
+            }
+
+        # 获取技能文件夹
+        if not skill.folder_path:
+            return {
+                "success": False,
+                "error": "技能没有配置文件夹",
+                "output": None,
+                "result": None
+            }
+
+        skill_folder = SKILLS_STORAGE_DIR / skill.folder_path
+
+        # 检查是否有 main.py（优先直接执行）
+        main_script = skill_folder / "main.py"
+        if main_script.exists():
+            print(f"[AgentServiceV2] 直接执行 main.py: {main_script}")
+
+            try:
+                # 执行 main.py
+                result = subprocess.run(
+                    [sys.executable, str(main_script), json.dumps(params)],
+                    capture_output=True,
+                    timeout=180,
+                    cwd=str(skill_folder),
+                )
+
+                # 安全解码输出
+                try:
+                    stdout = result.stdout.decode('utf-8', errors='replace').strip() if result.stdout else ""
+                except:
+                    stdout = str(result.stdout) if result.stdout else ""
+
+                try:
+                    stderr = result.stderr.decode('utf-8', errors='replace').strip() if result.stderr else ""
+                except:
+                    stderr = str(result.stderr) if result.stderr else ""
+
+                print(f"[AgentServiceV2] 执行完成, returncode={result.returncode}")
+                print(f"[AgentServiceV2] stdout: {stdout[:500] if stdout else 'None'}")
+                print(f"[AgentServiceV2] stderr: {stderr[:500] if stderr else 'None'}")
+
+                # 尝试解析 JSON 输出
+                try:
+                    output_data = json.loads(stdout)
+                    return {
+                        "success": output_data.get("success", True),
+                        "error": output_data.get("error"),
+                        "output": output_data.get("output", stdout),
+                        "result": output_data.get("result"),
+                        "_output_file": output_data.get("_output_file")
+                    }
+                except json.JSONDecodeError:
+                    # 非 JSON 输出
+                    if result.returncode == 0:
+                        return {
+                            "success": True,
+                            "error": None,
+                            "output": stdout or "执行完成",
+                            "result": None
+                        }
+                    else:
+                        return {
+                            "success": False,
+                            "error": stderr or stdout or "执行失败",
+                            "output": stdout,
+                            "result": None
+                        }
+
+            except subprocess.TimeoutExpired:
+                return {
+                    "success": False,
+                    "error": "执行超时",
+                    "output": None,
+                    "result": None
+                }
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "output": None,
+                    "result": None
+                }
+
+        # 没有 main.py，使用 AI 执行（基于 SKILL.md）
+        skill_md_path = skill_folder / "SKILL.md"
+        if not skill_md_path.exists():
+            return {
+                "success": False,
+                "error": "技能没有 main.py 或 SKILL.md",
+                "output": None,
+                "result": None
+            }
+
+        print(f"[AgentServiceV2] 使用 AI 执行技能: {skill.name}")
+
+        # 读取 SKILL.md
+        skill_md_content = skill_md_path.read_text(encoding='utf-8')
+
+        # 构建用户请求
+        context = params.get("context", "") or params.get("skillDescription", "")
+        file_paths = params.get("file_paths", [])
+        file_path = params.get("file_path", "")
+        if file_path and file_path not in file_paths:
+            file_paths.append(file_path)
+
+        user_message = context or "请根据技能说明执行任务"
+        if file_paths:
+            files_info = "\n".join([f"- {fp}" for fp in file_paths])
+            user_message = f"用户上传了以下文件:\n{files_info}\n\n用户请求: {user_message}"
+
+        # 构建系统提示
+        system_prompt = f"""{skill_md_content}
+
+## 工作目录
+当前工作目录: {skill_folder}
+输出目录: {OUTPUTS_DIR}
+上传目录: {UPLOADS_DIR}
+
+## 执行要求
+1. 严格按照 SKILL.md 中的指示执行
+2. 使用 Bash 工具执行脚本
+3. 输出文件必须保存到 {OUTPUTS_DIR} 目录
+4. 脚本路径使用相对路径（如 scripts/xxx.py）或绝对路径
+"""
+
+        # 使用 Claude Agent SDK 执行
+        options = ClaudeAgentOptions(
+            model=self.settings.claude_model or "claude-sonnet-4-20250514",
+            system_prompt=system_prompt,
+            tools=["Bash", "Read", "Write"],
+            permission_mode="bypassPermissions",
+            max_turns=10,
+            cwd=str(skill_folder),
+        )
+
+        result_content = []
+        output_files = []
+
+        try:
+            async for event in query(prompt=user_message, options=options):
+                if isinstance(event, AssistantMessage):
+                    for block in event.content:
+                        if hasattr(block, 'text'):
+                            result_content.append(block.text)
+
+            # 检查输出目录中最近生成的文件
+            for ext in ['.pdf', '.xlsx', '.csv', '.json', '.png', '.html']:
+                for f in OUTPUTS_DIR.glob(f"*{ext}"):
+                    if time.time() - f.stat().st_mtime < 60:  # 最近60秒生成的
+                        output_files.append({
+                            "name": f.name,
+                            "type": ext[1:],
+                            "url": f"/outputs/{f.name}",
+                            "path": str(f)
+                        })
+
+            final_output = "\n".join(result_content)
+
+            return {
+                "success": True,
+                "error": None,
+                "output": final_output,
+                "result": {"content": final_output},
+                "_output_file": output_files[0] if output_files else None
+            }
+
+        except Exception as e:
+            print(f"[AgentServiceV2] AI 执行失败: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "output": None,
+                "result": None
+            }
+
+
 # ==================== 工厂函数 ====================
 
 def create_agent_service(db: Session) -> AgentServiceV2:

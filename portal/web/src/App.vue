@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 import LogPanel from '@/components/common/LogPanel.vue'
 import DataNotesTab from '@/components/common/DataNotesTab.vue'
 import GlobalNav from '@/components/common/GlobalNav.vue'
+import { agentsApi } from '@/api'
 
 const route = useRoute()
 const showLogPanel = ref(false)
@@ -18,13 +19,39 @@ const departmentName = computed(() => {
   }
   return ''
 })
+
+// 当前 Agent ID（从 URL 获取或通过名称查询）
+const currentAgentId = ref<string | undefined>(undefined)
+
+// 监听 agent 名称变化，自动获取 agent ID
+watch(() => route.query.agent, async (agentName) => {
+  if (!agentName) {
+    currentAgentId.value = undefined
+    return
+  }
+
+  // 先检查 URL 是否有 agentId 参数
+  if (route.query.agentId) {
+    currentAgentId.value = route.query.agentId as string
+    return
+  }
+
+  // 否则通过名称查询
+  try {
+    const agent = await agentsApi.getByName(agentName as string)
+    currentAgentId.value = agent?.id
+  } catch (e) {
+    console.error('Failed to get agent ID:', e)
+    currentAgentId.value = undefined
+  }
+}, { immediate: true })
 </script>
 
 <template>
   <GlobalNav />
   <RouterView />
   <LogPanel v-model:show="showLogPanel" />
-  <DataNotesTab :department-name="departmentName" />
+  <DataNotesTab :department-name="departmentName" :agent-id="currentAgentId" />
 </template>
 
 <style>

@@ -4435,13 +4435,13 @@ const sendMessage = async () => {
   // 所有需要发送给 AI 的文件（包含上传的文件和 @ 引用的文件）
   let allFilesForAI: MessageAttachment[] = [...displayAttachments, ...refAttachments]
 
-  // 如果没有上传文件也没有 @ 引用的文件，自动从 File Manage 获取文件
+  // 如果没有上传文件也没有 @ 引用的文件，自动从 File Manage 获取当前 Agent 的文件
   // 直接把 File Manage 的文件路径放到 inlineRefs 中，和 @ 引用一样
-  if (allFilesForAI.length === 0) {
+  if (allFilesForAI.length === 0 && props.agentId) {
     try {
-      // 直接获取所有 File Manage 文件（不限制 agent_id）
-      const allNotes = await dataNotesApi.getAll({ parentId: 'all' })
-      console.log('[sendMessage] File Manage 所有文件:', allNotes)
+      // 只获取当前 Agent 的 File Manage 文件（按 agentId 隔离）
+      const allNotes = await dataNotesApi.getAll({ parentId: 'all', agentId: props.agentId })
+      console.log(`[sendMessage] Agent ${props.agentId} 的 File Manage 文件:`, allNotes)
 
       for (const note of allNotes) {
         // 只要有 file_url 就添加（跳过文件夹）
@@ -4458,7 +4458,7 @@ const sendMessage = async () => {
           console.log(`[sendMessage] 添加 File Manage 文件: ${note.name} -> ${note.file_url}`)
         }
       }
-      console.log(`[sendMessage] File Manage 文件总数: ${allFilesForAI.length}`)
+      console.log(`[sendMessage] Agent ${props.agentId} File Manage 文件总数: ${allFilesForAI.length}`)
     } catch (e) {
       console.warn('[sendMessage] 获取 File Manage 文件失败:', e)
     }

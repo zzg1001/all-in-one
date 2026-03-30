@@ -17,6 +17,7 @@ from schemas.agent import (
     AgentLoopRequest, ToolCall
 )
 from services.agent_service import AgentService
+from services.agent_service_v2 import AgentServiceV2
 from services.file_generator import generate_output_file
 from routers.logs import (
     log_info, log_error,
@@ -257,38 +258,51 @@ async def execute_skill(request: ExecuteRequest, db: Session = Depends(get_db)):
     print(f"[Execute] Full params: {params}")
     print(f"======================================\n")
 
-    service = AgentService(db)
-    log_skill_step(skill_name, "执行脚本", detail=f"script: {request.script_name}")
+    # 使用 Claude Agent SDK 执行技能
+    service = AgentServiceV2(db)
+    log_skill_step(skill_name, "执行脚本", detail=f"使用 Claude Agent SDK")
 
-    success, result, error, output = service.execute_skill(
+    # 调用异步执行方法
+    exec_result = await service.execute_skill(
         skill_id=request.skill_id,
-        script_name=request.script_name,
         params=params
     )
 
-    # 生成输出文件
+    success = exec_result.get("success", False)
+    result = exec_result.get("result")
+    error = exec_result.get("error")
+    output = exec_result.get("output")
+
+    # 处理输出文件
     output_file = None
+    if exec_result.get("_output_file"):
+        file_info = exec_result["_output_file"]
+        output_file = OutputFile(
+            name=file_info.get("name", "output"),
+            type=file_info.get("type", "file"),
+            url=file_info.get("url", ""),
+            size=file_info.get("size")
+        )
+        log_file_write(file_info.get('name'), file_info.get('size'))
+    elif success and skill:
+        # 尝试使用 file_generator 生成输出
+        try:
+            skill_output_config = skill.output_config if hasattr(skill, 'output_config') else None
+            file_info = generate_output_file(
+                skill_name=skill.name,
+                skill_description=skill.description,
+                execution_result=result,
+                execution_output=output,
+                params=request.params,
+                output_config=skill_output_config
+            )
+            if file_info:
+                output_file = OutputFile(**file_info)
+                log_file_write(file_info['name'], file_info.get('size'))
+        except Exception:
+            pass
+
     if success:
-        log_skill_step(skill_name, "生成文件")
-
-        if skill:
-            try:
-                skill_output_config = skill.output_config if hasattr(skill, 'output_config') else None
-                file_info = generate_output_file(
-                    skill_name=skill.name,
-                    skill_description=skill.description,
-                    execution_result=result,
-                    execution_output=output,
-                    params=request.params,
-                    output_config=skill_output_config
-                )
-                if file_info:
-                    output_file = OutputFile(**file_info)
-                    log_file_write(file_info['name'], file_info.get('size'))
-            except Exception:
-                pass
-
-        # 日志：完成（包含结果）
         log_skill_success(skill_name, result)
         log_session_end(True, f"技能 {skill_name} 执行成功")
     else:
