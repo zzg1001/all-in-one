@@ -21,16 +21,13 @@ services:
     build:
       context: ./portal/server
       dockerfile: Dockerfile
-    ports:
-      - "8000:8000"
+    network_mode: host
     env_file:
       - ./deploy.env
     volumes:
       - ./portal/server/skills_storage:/app/skills_storage
       - ./portal/server/outputs:/app/outputs
       - ./portal/server/uploads:/app/uploads
-    networks:
-      - app-network
 
   # ========== Admin (管理端) ==========
   admin-web:
@@ -52,12 +49,9 @@ services:
     build:
       context: ./admin/server
       dockerfile: Dockerfile
-    ports:
-      - "8001:8000"
+    network_mode: host
     env_file:
       - ./deploy.env
-    networks:
-      - app-network
 
   # ========== 数据库 ==========
   mysql:
