@@ -23,6 +23,7 @@ class Settings(BaseSettings):
 
     # Claude AI
     anthropic_api_key: str = ""
+    anthropic_auth_token: str = ""  # Azure 代理用这个
     anthropic_base_url: str = ""
     claude_model: str = "claude-opus-4-5"
 
