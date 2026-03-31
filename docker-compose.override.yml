@@ -1,0 +1,20 @@
+version: '3.8'
+
+# 覆盖配置：只启动后端 API 服务
+# 前端已部署到宝塔 Nginx，数据库使用外部服务
+
+services:
+  # 禁用前端服务
+  portal-web:
+    profiles: ["frontend"]
+
+  admin-web:
+    profiles: ["frontend"]
+
+  # 禁用内置 Nginx
+  nginx:
+    profiles: ["gateway"]
+
+  # 禁用内置 MySQL（使用外部数据库）
+  mysql:
+    profiles: ["database"]
