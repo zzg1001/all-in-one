@@ -41,12 +41,17 @@ class AgentService:
 
         if active_config:
             # 使用数据库配置
-            client_kwargs = {"api_key": active_config.api_key}
-            if active_config.base_url:
-                client_kwargs["base_url"] = active_config.base_url
-                # Azure 代理需要 api-key header
-                if 'azure' in active_config.base_url.lower():
-                    client_kwargs["default_headers"] = {"api-key": active_config.api_key}
+            if active_config.base_url and 'azure' in active_config.base_url.lower():
+                # Azure 代理需要 Authorization: Bearer 方式
+                client_kwargs = {
+                    "base_url": active_config.base_url,
+                    "api_key": "placeholder",  # SDK 需要，但不会被使用
+                    "default_headers": {"Authorization": f"Bearer {active_config.api_key}"}
+                }
+            else:
+                client_kwargs = {"api_key": active_config.api_key}
+                if active_config.base_url:
+                    client_kwargs["base_url"] = active_config.base_url
             self.client = anthropic.Anthropic(**client_kwargs)
             self.model = active_config.model_id
             self.max_tokens = active_config.max_tokens or 4096
@@ -57,12 +62,17 @@ class AgentService:
             # 回退到环境变量配置
             # 优先使用 AUTH_TOKEN (Azure)，否则用 API_KEY
             api_key = settings.anthropic_auth_token or settings.anthropic_api_key
-            client_kwargs = {"api_key": api_key}
-            if settings.anthropic_base_url:
-                client_kwargs["base_url"] = settings.anthropic_base_url
-                # Azure 代理需要 api-key header
-                if 'azure' in settings.anthropic_base_url.lower():
-                    client_kwargs["default_headers"] = {"api-key": api_key}
+            if settings.anthropic_base_url and 'azure' in settings.anthropic_base_url.lower():
+                # Azure 代理需要 Authorization: Bearer 方式
+                client_kwargs = {
+                    "base_url": settings.anthropic_base_url,
+                    "api_key": "placeholder",
+                    "default_headers": {"Authorization": f"Bearer {api_key}"}
+                }
+            else:
+                client_kwargs = {"api_key": api_key}
+                if settings.anthropic_base_url:
+                    client_kwargs["base_url"] = settings.anthropic_base_url
             self.client = anthropic.Anthropic(**client_kwargs)
             self.model = settings.claude_model
             self.max_tokens = 4096
