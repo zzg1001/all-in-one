@@ -625,7 +625,7 @@ class AgentServiceV2:
                     output_data = json.loads(stdout)
                 except json.JSONDecodeError:
                     # 尝试从输出中提取 JSON 部分
-                    json_start = stdout.rfind('{')
+                    json_start = stdout.find('{')
                     if json_start != -1:
                         try:
                             json_str = stdout[json_start:]
