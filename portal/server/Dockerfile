@@ -6,10 +6,20 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-wqy-microhei \
     fonts-wqy-zenhei \
+    fonts-noto-cjk \
     fontconfig \
     && fc-cache -fv \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Configure matplotlib to use Chinese fonts globally
+RUN mkdir -p /root/.config/matplotlib && \
+    echo "font.family: WenQuanYi Micro Hei" > /root/.config/matplotlib/matplotlibrc && \
+    echo "axes.unicode_minus: False" >> /root/.config/matplotlib/matplotlibrc
+
+# Set environment for Chinese locale
+ENV LC_ALL=C.UTF-8
+ENV LANG=C.UTF-8
 
 # Install dependencies
 COPY requirements.txt .
