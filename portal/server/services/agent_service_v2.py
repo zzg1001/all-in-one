@@ -619,16 +619,33 @@ class AgentServiceV2:
                 print(f"[AgentServiceV2] stderr: {stderr[:500] if stderr else 'None'}")
 
                 # 尝试解析 JSON 输出
+                # 支持混合输出：纯文本 + JSON（从最后一个 { 开始提取）
+                output_data = None
                 try:
                     output_data = json.loads(stdout)
+                except json.JSONDecodeError:
+                    # 尝试从输出中提取 JSON 部分
+                    json_start = stdout.rfind('{')
+                    if json_start != -1:
+                        try:
+                            json_str = stdout[json_start:]
+                            output_data = json.loads(json_str)
+                            # 保留 JSON 前面的文本作为额外输出
+                            prefix_text = stdout[:json_start].strip()
+                            if prefix_text:
+                                output_data["_prefix_output"] = prefix_text
+                        except json.JSONDecodeError:
+                            pass
+
+                if output_data:
                     return {
                         "success": output_data.get("success", True),
                         "error": output_data.get("error"),
-                        "output": output_data.get("output", stdout),
+                        "output": output_data.get("output") or output_data.get("_prefix_output") or stdout,
                         "result": output_data.get("result"),
                         "_output_file": output_data.get("_output_file")
                     }
-                except json.JSONDecodeError:
+                else:
                     # 非 JSON 输出
                     if result.returncode == 0:
                         return {
