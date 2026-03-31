@@ -35,8 +35,8 @@ RUN pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple && \
 # Copy source
 COPY . .
 
-# Create directories
-RUN mkdir -p skills_storage outputs uploads file_manage
+# Create storage directories
+RUN mkdir -p outputs uploads file_manage skills_storage skills_storage_temp
 
 EXPOSE 8000
 
