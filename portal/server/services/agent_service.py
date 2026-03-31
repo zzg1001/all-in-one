@@ -44,6 +44,9 @@ class AgentService:
             client_kwargs = {"api_key": active_config.api_key}
             if active_config.base_url:
                 client_kwargs["base_url"] = active_config.base_url
+                # Azure 代理需要 api-key header
+                if 'azure' in active_config.base_url.lower():
+                    client_kwargs["default_headers"] = {"api-key": active_config.api_key}
             self.client = anthropic.Anthropic(**client_kwargs)
             self.model = active_config.model_id
             self.max_tokens = active_config.max_tokens or 4096
