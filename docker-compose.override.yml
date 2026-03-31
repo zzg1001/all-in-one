@@ -18,3 +18,10 @@ services:
   # 禁用内置 MySQL（使用外部数据库）
   mysql:
     profiles: ["database"]
+
+  # 移除对内置 mysql 的依赖
+  portal-api:
+    depends_on: []
+
+  admin-api:
+    depends_on: []
