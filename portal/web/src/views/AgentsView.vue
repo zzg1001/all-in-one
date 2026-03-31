@@ -659,6 +659,7 @@ const getStatusText = (status: string) => {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 20px;
+  grid-auto-rows: 1fr;
 }
 
 .agent-card {
@@ -668,6 +669,7 @@ const getStatusText = (status: string) => {
   animation: card-in 0.3s ease-out backwards;
   animation-delay: var(--delay);
   cursor: pointer;
+  height: 100%;
 }
 
 @keyframes card-in {
@@ -689,6 +691,9 @@ const getStatusText = (status: string) => {
   border-radius: 16px;
   transition: all 0.3s ease;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 .agent-card:hover .card-content {
@@ -769,6 +774,8 @@ const getStatusText = (status: string) => {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  flex: 1;
+  min-height: 36px;
 }
 
 .agent-meta {
