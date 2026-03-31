@@ -24,7 +24,7 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      - ./portal/server/.env
+      - ./deploy.env
     volumes:
       - ./portal/server/skills_storage:/app/skills_storage
       - ./portal/server/outputs:/app/outputs
@@ -55,7 +55,7 @@ services:
     ports:
       - "8001:8000"
     env_file:
-      - ./admin/server/.env
+      - ./deploy.env
     networks:
       - app-network
 
