@@ -2,11 +2,17 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Use Aliyun mirror for faster downloads in China (Debian Trixie uses DEB822 format)
+RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i 's|URIs: http://deb.debian.org|URIs: http://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources; \
+    elif [ -f /etc/apt/sources.list ]; then \
+        sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list; \
+    fi
+
 # Install Chinese fonts for PDF generation
 RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-wqy-microhei \
     fonts-wqy-zenhei \
-    fonts-noto-cjk \
     fontconfig \
     && fc-cache -fv \
     && apt-get clean \
