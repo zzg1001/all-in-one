@@ -28,6 +28,7 @@ services:
       - ./portal/server/skills_storage:/app/skills_storage
       - ./portal/server/outputs:/app/outputs
       - ./portal/server/uploads:/app/uploads
+      - ./portal/server/file_manage:/app/file_manage
 
   # ========== Admin (管理端) ==========
   admin-web:

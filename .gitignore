@@ -40,3 +40,13 @@ build/
 temp_*.json
 insert_config.py
 req
+
+# Runtime storage directories (don't commit user data)
+uploads/
+outputs/
+file_manage/
+skills_storage/
+skills_storage_temp/
+
+# Keep directory structure with .gitkeep
+!**/.gitkeep

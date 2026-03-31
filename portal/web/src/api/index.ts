@@ -1297,6 +1297,24 @@ export const dataNotesApi = {
       `/data-notes/${id}/files`,
       { headers: { 'X-User-ID': getUserId() } }
     ),
+
+  // 上传文件到 File Manage（独立存储，与输入框上传分开）
+  upload: async (file: File, agentId?: string): Promise<{ url: string; name: string; size: number; agent_id?: string }> => {
+    const formData = new FormData()
+    formData.append('file', file)
+    if (agentId) {
+      formData.append('agent_id', agentId)
+    }
+    const response = await fetch(`${API_BASE_URL}/upload`, {
+      method: 'POST',
+      body: formData,
+    })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Upload failed' }))
+      throw new Error(error.detail || 'Upload failed')
+    }
+    return response.json()
+  },
 }
 
 // ============ Chat Sessions API ============

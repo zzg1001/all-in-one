@@ -21,3 +21,5 @@ class DataNote(Base):
     level = Column(Integer, default=0)  # 层级：0=根目录
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    # 软删除
+    deleted_at = Column(DateTime, nullable=True, index=True)  # 软删除时间戳，NULL 表示未删除

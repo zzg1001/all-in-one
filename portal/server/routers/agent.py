@@ -39,7 +39,10 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     from models.skill import Skill
     skill_names = []
     if request.skill_ids:
-        skills = db.query(Skill).filter(Skill.id.in_(request.skill_ids)).all()
+        skills = db.query(Skill).filter(
+            Skill.id.in_(request.skill_ids),
+            Skill.deleted_at.is_(None)
+        ).all()
         skill_names = [s.name for s in skills]
 
     log_session_start(
@@ -81,7 +84,10 @@ async def chat_stream(
     from models.skill import Skill
     skill_names = []
     if request.skill_ids:
-        skills = db.query(Skill).filter(Skill.id.in_(request.skill_ids)).all()
+        skills = db.query(Skill).filter(
+            Skill.id.in_(request.skill_ids),
+            Skill.deleted_at.is_(None)
+        ).all()
         skill_names = [s.name for s in skills]
 
     log_session_start(
@@ -95,7 +101,11 @@ async def chat_stream(
 
     # RAG: 从向量数据库检索相关内容
     rag_context = ""
-    if request.enable_rag and (request.agent_id or user_id):
+    from config import get_settings
+    settings = get_settings()
+
+    # 检查向量数据库是否启用
+    if request.enable_rag and settings.vector_db_enabled and (request.agent_id or user_id):
         try:
             # 使用延迟导入避免循环依赖
             import importlib.util
@@ -434,25 +444,65 @@ async def upload_file(file: UploadFile = File(...)):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     short_id = str(uuid.uuid4())[:8]
     safe_filename = f"upload_{timestamp}_{short_id}{file_ext}"
-    filepath = UPLOADS_DIR / safe_filename
 
-    # 保存文件
+    # 读取文件内容
     try:
         content = await file.read()
-        filepath.write_bytes(content)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"文件保存失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"读取文件失败: {str(e)}")
 
-    # 返回文件信息
-    return {
-        "success": True,
-        "filename": safe_filename,
-        "original_name": file.filename,
-        "path": str(filepath),  # 绝对路径，供技能脚本使用
-        "url": f"/uploads/{safe_filename}",  # 相对 URL
-        "size": len(content),
-        "type": file_ext.lstrip(".")
-    }
+    # 根据存储类型保存文件
+    from config import get_settings
+    settings = get_settings()
+
+    if settings.storage_type == "minio":
+        # 上传到 MinIO，同时保存本地副本供技能脚本使用
+        try:
+            from services.storage.minio_storage import MinioStorage
+            storage = MinioStorage(
+                endpoint=settings.minio_endpoint,
+                access_key=settings.minio_access_key,
+                secret_key=settings.minio_secret_key,
+                bucket=settings.minio_uploads_bucket,
+                port=settings.minio_port,
+                secure=settings.minio_secure
+            )
+            await storage.write_file(safe_filename, content)
+
+            # 同时保存本地副本，供技能脚本直接读取
+            local_path = UPLOADS_DIR / safe_filename
+            local_path.write_bytes(content)
+
+            return {
+                "success": True,
+                "filename": safe_filename,
+                "original_name": file.filename,
+                "path": str(local_path),  # 本地路径供技能脚本使用
+                "url": f"/storage/uploads/{safe_filename}",  # MinIO URL
+                "size": len(content),
+                "type": file_ext.lstrip("."),
+                "storage": "minio"
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"上传到存储失败: {str(e)}")
+    else:
+        # 本地文件系统
+        try:
+            filepath = UPLOADS_DIR / safe_filename
+            filepath.write_bytes(content)
+
+            return {
+                "success": True,
+                "filename": safe_filename,
+                "original_name": file.filename,
+                "path": str(filepath),
+                "url": f"/uploads/{safe_filename}",
+                "size": len(content),
+                "type": file_ext.lstrip("."),
+                "storage": "local"
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"文件保存失败: {str(e)}")
 
 
 @router.get("/preview/{file_path:path}")
@@ -464,33 +514,87 @@ async def preview_file(file_path: str, max_rows: int = 100):
     - JSON: 返回 JSON 内容
     - 图片: 返回图片信息
     - 其他: 返回文件信息
+
+    支持本地文件系统和 MinIO 存储
     """
     import pandas as pd
+    import tempfile
+    import io
+    from config import get_settings, get_outputs_dir, get_uploads_dir
 
-    # 处理路径 - 支持 /outputs/xxx 和 /uploads/xxx 格式
-    base_dir = Path(__file__).parent.parent
+    settings = get_settings()
+
+    # 解析文件路径，确定是 outputs 还是 uploads
+    if file_path.startswith("/"):
+        file_path = file_path.lstrip("/")
+
     if file_path.startswith("outputs/"):
-        full_path = base_dir / file_path
+        storage_category = "outputs"
+        relative_path = file_path[8:]  # 去掉 "outputs/"
     elif file_path.startswith("uploads/"):
-        full_path = base_dir / file_path
-    elif file_path.startswith("/outputs/"):
-        full_path = base_dir / file_path.lstrip("/")
-    elif file_path.startswith("/uploads/"):
-        full_path = base_dir / file_path.lstrip("/")
+        storage_category = "uploads"
+        relative_path = file_path[8:]  # 去掉 "uploads/"
     else:
-        # 直接使用文件名，尝试在 outputs 目录查找
-        full_path = base_dir / "outputs" / file_path
+        storage_category = "outputs"
+        relative_path = file_path
 
-    if not full_path.exists():
-        raise HTTPException(status_code=404, detail=f"文件不存在: {file_path}")
+    # 根据存储类型获取文件
+    file_content = None
+    file_size = 0
+    file_name = Path(relative_path).name
+    suffix = Path(relative_path).suffix.lower()
 
-    suffix = full_path.suffix.lower()
-    file_size = full_path.stat().st_size
+    # 获取本地目录路径（作为回退）
+    base_dir = get_outputs_dir() if storage_category == "outputs" else get_uploads_dir()
+    local_path = base_dir / relative_path
+    found_in_minio = False
+
+    if settings.storage_type == "minio":
+        # 优先从 MinIO 读取
+        try:
+            from services.storage.minio_storage import MinioStorage
+            bucket = settings.minio_outputs_bucket if storage_category == "outputs" else settings.minio_uploads_bucket
+            storage = MinioStorage(
+                endpoint=settings.minio_endpoint,
+                access_key=settings.minio_access_key,
+                secret_key=settings.minio_secret_key,
+                bucket=bucket,
+                port=settings.minio_port,
+                secure=settings.minio_secure
+            )
+
+            # 检查文件是否存在于 MinIO
+            if await storage.exists(relative_path):
+                found_in_minio = True
+                file_info = await storage.get_file_info(relative_path)
+                file_size = file_info.size if file_info else 0
+
+                # 对于需要内容的文件类型，读取内容
+                if suffix in ['.xlsx', '.xls', '.csv', '.json', '.md', '.html', '.htm', '.py', '.js', '.ts', '.txt']:
+                    file_content = await storage.read_file(relative_path)
+
+                # 生成访问 URL
+                storage_url = f"/storage/{storage_category}/{relative_path}"
+
+        except Exception as e:
+            print(f"[Preview] MinIO 读取失败，尝试本地: {e}")
+
+    # 如果 MinIO 没找到或不是 MinIO 模式，尝试本地文件
+    if not found_in_minio:
+        if not local_path.exists():
+            raise HTTPException(status_code=404, detail=f"文件不存在: {file_path}")
+
+        file_size = local_path.stat().st_size
+        storage_url = f"/{storage_category}/{relative_path}"
+
+        # 对于需要内容的文件类型，读取内容
+        if suffix in ['.xlsx', '.xls', '.csv', '.json', '.md', '.html', '.htm', '.py', '.js', '.ts', '.txt']:
+            file_content = local_path.read_bytes()
 
     # Excel 文件
     if suffix in ['.xlsx', '.xls']:
         try:
-            df = pd.read_excel(full_path)
+            df = pd.read_excel(io.BytesIO(file_content))
             total_rows = len(df)
             df = df.head(max_rows)
             return {
@@ -500,7 +604,7 @@ async def preview_file(file_path: str, max_rows: int = 100):
                 "data": df.fillna("").astype(str).values.tolist(),
                 "total_rows": total_rows,
                 "displayed_rows": len(df),
-                "file_name": full_path.name,
+                "file_name": file_name,
                 "file_size": file_size
             }
         except Exception as e:
@@ -509,7 +613,7 @@ async def preview_file(file_path: str, max_rows: int = 100):
     # CSV 文件
     elif suffix == '.csv':
         try:
-            df = pd.read_csv(full_path)
+            df = pd.read_csv(io.BytesIO(file_content))
             total_rows = len(df)
             df = df.head(max_rows)
             return {
@@ -519,22 +623,22 @@ async def preview_file(file_path: str, max_rows: int = 100):
                 "data": df.fillna("").astype(str).values.tolist(),
                 "total_rows": total_rows,
                 "displayed_rows": len(df),
-                "file_name": full_path.name,
+                "file_name": file_name,
                 "file_size": file_size
             }
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"解析 CSV 失败: {str(e)}")
 
-    # JSON 文件 - 始终以 JSON 格式展示
+    # JSON 文件
     elif suffix == '.json':
         try:
-            content = full_path.read_text(encoding='utf-8')
+            content = file_content.decode('utf-8')
             data = json.loads(content)
             return {
                 "type": "json",
                 "format": "json",
                 "content": data,
-                "file_name": full_path.name,
+                "file_name": file_name,
                 "file_size": file_size
             }
         except Exception as e:
@@ -543,12 +647,12 @@ async def preview_file(file_path: str, max_rows: int = 100):
     # Markdown 文件
     elif suffix == '.md':
         try:
-            content = full_path.read_text(encoding='utf-8')
+            content = file_content.decode('utf-8')
             return {
                 "type": "markdown",
                 "format": "md",
                 "content": content,
-                "file_name": full_path.name,
+                "file_name": file_name,
                 "file_size": file_size
             }
         except Exception as e:
@@ -557,12 +661,12 @@ async def preview_file(file_path: str, max_rows: int = 100):
     # HTML 文件
     elif suffix in ['.html', '.htm']:
         try:
-            content = full_path.read_text(encoding='utf-8')
+            content = file_content.decode('utf-8')
             return {
                 "type": "html",
                 "format": "html",
                 "content": content,
-                "file_name": full_path.name,
+                "file_name": file_name,
                 "file_size": file_size
             }
         except Exception as e:
@@ -573,20 +677,20 @@ async def preview_file(file_path: str, max_rows: int = 100):
         return {
             "type": "image",
             "format": suffix.lstrip('.'),
-            "url": f"/{file_path}" if not file_path.startswith('/') else file_path,
-            "file_name": full_path.name,
+            "url": storage_url,
+            "file_name": file_name,
             "file_size": file_size
         }
 
     # 代码文件
     elif suffix in ['.py', '.js', '.ts', '.java', '.go', '.rs', '.cpp', '.c', '.vue', '.jsx', '.tsx']:
         try:
-            content = full_path.read_text(encoding='utf-8')
+            content = file_content.decode('utf-8')
             return {
                 "type": "code",
                 "format": suffix.lstrip('.'),
                 "content": content,
-                "file_name": full_path.name,
+                "file_name": file_name,
                 "file_size": file_size
             }
         except Exception as e:
@@ -597,10 +701,10 @@ async def preview_file(file_path: str, max_rows: int = 100):
         return {
             "type": "ppt",
             "format": suffix.lstrip('.'),
-            "file_name": full_path.name,
+            "file_name": file_name,
             "file_size": file_size,
-            "url": f"/{file_path}" if not file_path.startswith('/') else file_path,
-            "download_url": f"/{file_path}" if not file_path.startswith('/') else file_path
+            "url": storage_url,
+            "download_url": storage_url
         }
 
     # Word 文件
@@ -608,10 +712,10 @@ async def preview_file(file_path: str, max_rows: int = 100):
         return {
             "type": "word",
             "format": suffix.lstrip('.'),
-            "file_name": full_path.name,
+            "file_name": file_name,
             "file_size": file_size,
-            "url": f"/{file_path}" if not file_path.startswith('/') else file_path,
-            "download_url": f"/{file_path}" if not file_path.startswith('/') else file_path
+            "url": storage_url,
+            "download_url": storage_url
         }
 
     # PDF 文件
@@ -619,10 +723,10 @@ async def preview_file(file_path: str, max_rows: int = 100):
         return {
             "type": "pdf",
             "format": "pdf",
-            "file_name": full_path.name,
+            "file_name": file_name,
             "file_size": file_size,
-            "url": f"/{file_path}" if not file_path.startswith('/') else file_path,
-            "download_url": f"/{file_path}" if not file_path.startswith('/') else file_path
+            "url": storage_url,
+            "download_url": storage_url
         }
 
     # 其他文件
@@ -630,9 +734,9 @@ async def preview_file(file_path: str, max_rows: int = 100):
         return {
             "type": "file",
             "format": suffix.lstrip('.') if suffix else "unknown",
-            "file_name": full_path.name,
+            "file_name": file_name,
             "file_size": file_size,
-            "download_url": f"/{file_path}" if not file_path.startswith('/') else file_path
+            "download_url": storage_url
         }
 
 

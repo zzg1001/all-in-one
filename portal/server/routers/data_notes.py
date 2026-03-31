@@ -7,11 +7,110 @@ from fastapi import APIRouter, Depends, HTTPException, Header, UploadFile, File
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func as sql_func
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from database import get_db
-from config import get_uploads_dir
+from config import get_uploads_dir, get_file_manage_dir, get_outputs_dir
 from models.data_note import DataNote
 from schemas.data_note import DataNoteCreate, DataNoteUpdate, DataNoteResponse, FolderCreate, MoveToFolder
+
+
+async def ensure_local_file(file_url: str) -> Optional[Path]:
+    """
+    确保文件存在于本地。本地没有则从 MinIO 拉取并缓存。（异步版本）
+
+    Args:
+        file_url: 文件 URL，如 /file-manage/xxx/yyy.pdf
+
+    Returns:
+        本地文件路径，如果无法获取则返回 None
+    """
+    from services.storage.utils import is_minio_storage, get_storage_backend
+
+    # 解析路径
+    if file_url.startswith('/file-manage/'):
+        relative_path = file_url[len('/file-manage/'):]
+        local_dir = get_file_manage_dir()
+        category = "file_manage"
+    elif file_url.startswith('/uploads/'):
+        relative_path = file_url[len('/uploads/'):]
+        local_dir = get_uploads_dir()
+        category = "uploads"
+    elif file_url.startswith('/outputs/'):
+        relative_path = file_url[len('/outputs/'):]
+        local_dir = get_outputs_dir()
+        category = "outputs"
+    else:
+        return None
+
+    local_path = local_dir / relative_path
+
+    # 1. 本地存在，直接返回
+    if local_path.exists():
+        return local_path
+
+    # 2. 本地没有，从 MinIO 拉取
+    if is_minio_storage(category):
+        try:
+            storage = get_storage_backend(category)
+            content = await storage.read_file(relative_path)
+            # 缓存到本地
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            local_path.write_bytes(content)
+            print(f"[FileManage] 从 MinIO 拉取并缓存: {category}/{relative_path}")
+            return local_path
+        except Exception as e:
+            print(f"[FileManage] MinIO 读取失败 ({category}/{relative_path}): {e}")
+
+    return None
+
+
+def ensure_local_file_sync(file_url: str) -> Optional[Path]:
+    """
+    确保文件存在于本地。本地没有则从 MinIO 拉取并缓存。（同步版本）
+    """
+    import asyncio
+    from services.storage.utils import is_minio_storage, get_storage_backend
+
+    # 解析路径
+    if file_url.startswith('/file-manage/'):
+        relative_path = file_url[len('/file-manage/'):]
+        local_dir = get_file_manage_dir()
+        category = "file_manage"
+    elif file_url.startswith('/uploads/'):
+        relative_path = file_url[len('/uploads/'):]
+        local_dir = get_uploads_dir()
+        category = "uploads"
+    elif file_url.startswith('/outputs/'):
+        relative_path = file_url[len('/outputs/'):]
+        local_dir = get_outputs_dir()
+        category = "outputs"
+    else:
+        return None
+
+    local_path = local_dir / relative_path
+
+    # 1. 本地存在，直接返回
+    if local_path.exists():
+        return local_path
+
+    # 2. 本地没有，从 MinIO 拉取
+    if is_minio_storage(category):
+        try:
+            storage = get_storage_backend(category)
+            loop = asyncio.new_event_loop()
+            try:
+                content = loop.run_until_complete(storage.read_file(relative_path))
+                # 缓存到本地
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                local_path.write_bytes(content)
+                print(f"[FileManage] 从 MinIO 拉取并缓存: {category}/{relative_path}")
+                return local_path
+            finally:
+                loop.close()
+        except Exception as e:
+            print(f"[FileManage] MinIO 读取失败 ({category}/{relative_path}): {e}")
+
+    return None
 
 # 向量服务（可选，导入失败不影响基础功能）
 # 使用延迟导入避免循环依赖
@@ -21,6 +120,13 @@ _vector_service = None
 def get_vector_service():
     """延迟获取向量服务，避免循环导入"""
     global _vector_service_available, _vector_service
+
+    # 检查是否启用向量数据库
+    from config import get_settings
+    settings = get_settings()
+    if not settings.vector_db_enabled:
+        return None
+
     if _vector_service is not None:
         return _vector_service
     try:
@@ -45,8 +151,9 @@ router = APIRouter(prefix="/api", tags=["Data Notes"])
 
 MAX_FOLDER_LEVEL = 3  # 最大文件夹层级
 
-# 使用统一配置的上传目录
+# 使用统一配置的目录
 UPLOADS_DIR = get_uploads_dir()
+FILE_MANAGE_DIR = get_file_manage_dir()  # File Manage 独立目录
 
 
 def get_user_id(x_user_id: Optional[str] = Header(None)) -> str:
@@ -61,21 +168,68 @@ def get_user_id(x_user_id: Optional[str] = Header(None)) -> str:
 
 
 @router.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
-    """上传文件"""
+async def upload_file(
+    file: UploadFile = File(...),
+    agent_id: Optional[str] = None
+):
+    """File Manage 上传文件（按 agent_id 隔离存储，双写模式：本地 + MinIO）
+
+    Args:
+        file: 上传的文件
+        agent_id: Agent ID，文件将存储在 {agent_id}/ 目录下
+
+    Note:
+        File Manage 使用独立的 MinIO bucket (ai-file-manage)，与输入框上传分开
+    """
+    from config import get_settings
+    from services.storage.utils import get_storage_backend, is_minio_storage
+
     # 生成唯一文件名
     ext = Path(file.filename).suffix if file.filename else ""
     unique_name = f"{uuid.uuid4()}{ext}"
-    file_path = UPLOADS_DIR / unique_name
 
-    # 保存文件
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    # 按 agent_id 隔离存储路径
+    if agent_id:
+        relative_path = f"{agent_id}/{unique_name}"
+    else:
+        relative_path = unique_name
+
+    # 读取文件内容
+    content = await file.read()
+    file_size = len(content)
+
+    # 1. 先写 MinIO（主存储），失败则报错
+    if is_minio_storage("file_manage"):
+        try:
+            storage = get_storage_backend("file_manage")
+            import mimetypes
+            content_type, _ = mimetypes.guess_type(file.filename or "")
+            await storage.write_file(relative_path, content, content_type)
+            print(f"[FileManage] MinIO 写入成功: {relative_path}")
+        except Exception as e:
+            print(f"[FileManage] MinIO 上传失败: {e}")
+            raise HTTPException(status_code=500, detail=f"文件上传失败: {e}")
+
+    # 2. 再写本地（缓存）
+    if agent_id:
+        agent_dir = FILE_MANAGE_DIR / agent_id
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        local_path = agent_dir / unique_name
+    else:
+        local_path = FILE_MANAGE_DIR / unique_name
+
+    try:
+        with open(local_path, "wb") as buffer:
+            buffer.write(content)
+        print(f"[FileManage] 本地写入成功: {local_path}")
+    except Exception as e:
+        print(f"[FileManage] 本地写入失败（不影响上传）: {e}")
 
     return {
-        "url": f"/uploads/{unique_name}",
+        "url": f"/file-manage/{relative_path}",
         "name": file.filename,
-        "size": file_path.stat().st_size
+        "size": file_size,
+        "agent_id": agent_id
     }
 
 
@@ -96,7 +250,10 @@ async def get_data_notes(
         parent_id: 父文件夹ID，不传则获取根目录，传 'all' 获取全部
         agent_id: Agent ID，只返回该 Agent 关联的便签
     """
-    query = db.query(DataNote).filter(DataNote.user_id == user_id)
+    query = db.query(DataNote).filter(
+        DataNote.user_id == user_id,
+        DataNote.deleted_at.is_(None)  # 排除软删除的记录
+    )
 
     # 按 Agent 过滤
     if agent_id:
@@ -218,25 +375,20 @@ async def create_data_note(
         try:
             vector_service = get_vector_service()
             if vector_service:
-                # 解析文件路径
-                file_path = note.file_url
-                if file_path.startswith('/uploads/'):
-                    file_path = str(UPLOADS_DIR / file_path[len('/uploads/'):])
-                elif file_path.startswith('/outputs/'):
-                    from config import get_outputs_dir
-                    file_path = str(get_outputs_dir() / file_path[len('/outputs/'):])
-
-                print(f"[DataNotes] Indexing file path: {file_path}")
-
-                # 直接 await 索引文件（不使用 create_task，避免静默失败）
-                chunk_count = await vector_service.index_file(
-                    file_id=note.id,
-                    file_path=file_path,
-                    user_id=user_id,
-                    agent_id=note.agent_id,
-                    metadata={"name": note.name, "file_type": note.file_type}
-                )
-                print(f"[DataNotes] Vector indexing completed: {chunk_count} chunks indexed")
+                # 确保文件存在于本地（从 MinIO 拉取如果需要）
+                local_path = await ensure_local_file(note.file_url)
+                if local_path:
+                    print(f"[DataNotes] Indexing file path: {local_path}")
+                    chunk_count = await vector_service.index_file(
+                        file_id=note.id,
+                        file_path=str(local_path),
+                        user_id=user_id,
+                        agent_id=note.agent_id,
+                        metadata={"name": note.name, "file_type": note.file_type}
+                    )
+                    print(f"[DataNotes] Vector indexing completed: {chunk_count} chunks indexed")
+                else:
+                    print(f"[DataNotes] 无法获取文件: {note.file_url}")
             else:
                 print("[DataNotes] Vector service is None")
         except Exception as e:
@@ -279,44 +431,95 @@ async def delete_data_note(
     user_id: str = Depends(get_user_id),
     db: Session = Depends(get_db)
 ):
-    """删除数据便签（如果是文件夹则递归删除内容）"""
+    """软删除数据便签（标记 deleted_at，物理文件由清理任务异步删除）"""
+    from datetime import datetime
+
     note = db.query(DataNote).filter(
         DataNote.id == note_id,
-        DataNote.user_id == user_id
+        DataNote.user_id == user_id,
+        DataNote.deleted_at.is_(None)  # 只能删除未删除的
     ).first()
 
     if not note:
         raise HTTPException(status_code=404, detail="数据便签不存在")
 
-    # 收集需要删除向量索引的文件ID
-    file_ids_to_delete = []
+    now = datetime.now()
 
-    # 如果是文件夹，递归删除内容
+    # 如果是文件夹，递归软删除内容
     if note.file_type == 'folder':
-        file_ids_to_delete = collect_file_ids_in_folder(db, user_id, note_id)
-        delete_folder_contents(db, user_id, note_id)
-    elif note.file_type != 'folder':
-        file_ids_to_delete = [note_id]
+        soft_delete_folder_contents(db, user_id, note_id, now)
 
-    db.delete(note)
+    # 软删除当前记录
+    note.deleted_at = now
     db.commit()
 
-    # 异步删除向量索引（可选功能）
-    if file_ids_to_delete:
-        try:
-            vector_service = get_vector_service()
-            if vector_service:
-                for file_id in file_ids_to_delete:
-                    await vector_service.delete_file_index(file_id)
-        except Exception as e:
-            print(f"[DataNotes] Vector index deletion failed: {e}")
-
+    print(f"[DataNotes] 软删除: {note.name} (id={note_id})")
     return None
 
 
-def collect_file_ids_in_folder(db: Session, user_id: str, folder_id: str) -> List[str]:
-    """收集文件夹内所有文件的ID（用于删除向量索引）"""
-    file_ids = []
+def soft_delete_folder_contents(db: Session, user_id: str, folder_id: str, deleted_at):
+    """递归软删除文件夹内容"""
+    children = db.query(DataNote).filter(
+        DataNote.user_id == user_id,
+        DataNote.parent_id == folder_id,
+        DataNote.deleted_at.is_(None)
+    ).all()
+
+    for child in children:
+        if child.file_type == 'folder':
+            soft_delete_folder_contents(db, user_id, child.id, deleted_at)
+        child.deleted_at = deleted_at
+
+
+async def delete_physical_file(file_url: str):
+    """删除物理文件（本地 + MinIO 双删）"""
+    from services.storage.utils import get_storage_backend, is_minio_storage
+    from config import get_outputs_dir
+
+    if not file_url:
+        return
+
+    # 解析相对路径
+    if file_url.startswith('/file-manage/'):
+        relative_path = file_url[len('/file-manage/'):]
+        local_path = FILE_MANAGE_DIR / relative_path  # 使用独立的 file_manage 目录
+        category = "file_manage"
+    elif file_url.startswith('/uploads/'):
+        relative_path = file_url[len('/uploads/'):]
+        local_path = UPLOADS_DIR / relative_path
+        category = "uploads"
+    elif file_url.startswith('/outputs/'):
+        relative_path = file_url[len('/outputs/'):]
+        local_path = get_outputs_dir() / relative_path
+        category = "outputs"
+    else:
+        return
+
+    # 1. 删除本地文件
+    try:
+        if local_path.exists():
+            local_path.unlink()
+            print(f"[Delete] 本地文件已删除: {local_path}")
+    except Exception as e:
+        print(f"[Delete] 本地文件删除失败: {e}")
+
+    # 2. 删除 MinIO 文件
+    if is_minio_storage(category):
+        try:
+            storage = get_storage_backend(category)
+            await storage.delete_file(relative_path)
+            print(f"[Delete] MinIO 文件已删除: {relative_path}")
+        except Exception as e:
+            print(f"[Delete] MinIO 文件删除失败: {e}")
+
+
+def collect_files_in_folder(db: Session, user_id: str, folder_id: str) -> List[tuple]:
+    """收集文件夹内所有文件的信息（用于删除文件和向量索引）
+
+    Returns:
+        List of (file_id, file_url) tuples
+    """
+    files = []
     children = db.query(DataNote).filter(
         DataNote.user_id == user_id,
         DataNote.parent_id == folder_id
@@ -324,11 +527,11 @@ def collect_file_ids_in_folder(db: Session, user_id: str, folder_id: str) -> Lis
 
     for child in children:
         if child.file_type == 'folder':
-            file_ids.extend(collect_file_ids_in_folder(db, user_id, child.id))
-        else:
-            file_ids.append(child.id)
+            files.extend(collect_files_in_folder(db, user_id, child.id))
+        elif child.file_url:
+            files.append((child.id, child.file_url))
 
-    return file_ids
+    return files
 
 
 def delete_folder_contents(db: Session, user_id: str, folder_id: str):
@@ -575,7 +778,7 @@ async def download_folder_as_zip(
     zip_path = Path(temp_dir) / f"{note.name}.zip"
 
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-        add_folder_to_zip(db, user_id, note_id, zf, "", UPLOADS_DIR)
+        add_folder_to_zip(db, user_id, note_id, zf, "")
 
     return FileResponse(
         path=zip_path,
@@ -584,8 +787,10 @@ async def download_folder_as_zip(
     )
 
 
-def add_folder_to_zip(db: Session, user_id: str, folder_id: str, zf: zipfile.ZipFile, path_prefix: str, uploads_dir: Path):
+def add_folder_to_zip(db: Session, user_id: str, folder_id: str, zf: zipfile.ZipFile, path_prefix: str):
     """递归添加文件夹内容到zip"""
+    from config import get_outputs_dir
+
     children = db.query(DataNote).filter(
         DataNote.user_id == user_id,
         DataNote.parent_id == folder_id
@@ -595,12 +800,11 @@ def add_folder_to_zip(db: Session, user_id: str, folder_id: str, zf: zipfile.Zip
         if child.file_type == 'folder':
             # 递归处理子文件夹
             new_prefix = f"{path_prefix}{child.name}/" if path_prefix else f"{child.name}/"
-            add_folder_to_zip(db, user_id, child.id, zf, new_prefix, uploads_dir)
+            add_folder_to_zip(db, user_id, child.id, zf, new_prefix)
         elif child.file_url:
-            # 添加文件
-            file_name = child.file_url.split('/')[-1]
-            file_path = uploads_dir / file_name
-            if file_path.exists():
+            # 确保文件存在于本地（从 MinIO 拉取如果需要）
+            file_path = ensure_local_file_sync(child.file_url)
+            if file_path and file_path.exists():
                 arcname = f"{path_prefix}{child.name}" if path_prefix else child.name
                 zf.write(file_path, arcname)
 

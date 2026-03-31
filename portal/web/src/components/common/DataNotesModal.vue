@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, nextTick, onMounted, computed, watch } from 'vue'
-import { dataNotesApi, agentApi, type DataNote } from '@/api'
+import { dataNotesApi, type DataNote } from '@/api'
 import config from '@/config'
 
 const props = defineProps<{
@@ -555,8 +555,8 @@ const uploadFiles = async (files: File[]) => {
   try {
     for (const file of files) {
       try {
-        // 上传文件到服务器
-        const data = await agentApi.upload(file)
+        // 使用 File Manage 专用上传 API（独立存储，与输入框上传分开）
+        const data = await dataNotesApi.upload(file, props.agentId)
 
         if (data.url) {
           // 创建便签（关联到当前 Agent）

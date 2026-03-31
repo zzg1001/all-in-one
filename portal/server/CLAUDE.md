@@ -12,8 +12,8 @@ Product Background API - a FastAPI-based REST API service.
 # Install dependencies
 pip install -r requirements.txt
 
-# Run development server (with auto-reload, exclude skill folders)
-uvicorn main:app --reload --reload-exclude "skills_storage/*" --reload-exclude "skills_storage_temp/*"
+# Run development server (with auto-reload, exclude storage folders)
+uvicorn main:app --reload --reload-exclude "skills_storage/*" --reload-exclude "skills_storage_temp/*" --reload-exclude "file_manage/*" --reload-exclude "uploads/*" --reload-exclude "outputs/*"
 
 # Run production server
 uvicorn main:app --host 0.0.0.0 --port 8000

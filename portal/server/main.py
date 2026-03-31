@@ -11,6 +11,8 @@ from routers.logs import router as logs_router, setup_log_handler, sys_ready
 from routers.agents import router as agents_router
 from routers.agent_modules import router as agent_modules_router
 from routers.agent_v2 import router as agent_v2_router  # SDK 版本
+from routers.storage import router as storage_router  # 存储访问
+from routers.cleanup import router as cleanup_router  # 清理任务
 from config import get_outputs_dir, get_uploads_dir
 
 # 使用配置的路径（目录会自动创建）
@@ -24,8 +26,19 @@ async def lifespan(app: FastAPI):
     init_db()
     setup_log_handler()
     sys_ready()
+
+    # 启动时从 MinIO 同步文件到本地缓存（预热）
+    from services.storage_sync_service import sync_all_on_startup
+    await sync_all_on_startup()
+
+    # 启动清理调度器（配置在 deploy.env: CLEANUP_INTERVAL_HOURS, CLEANUP_RETENTION_DAYS）
+    from services.cleanup_service import start_cleanup_scheduler, stop_cleanup_scheduler
+    await start_cleanup_scheduler()  # 使用配置文件的值
+
     yield
-    pass
+
+    # Shutdown
+    stop_cleanup_scheduler()
 
 
 app = FastAPI(
@@ -56,6 +69,8 @@ app.include_router(chat_router)
 app.include_router(agents_router)
 app.include_router(agent_modules_router)
 app.include_router(agent_v2_router)  # SDK 版本 API
+app.include_router(storage_router)  # 存储 API (支持 MinIO)
+app.include_router(cleanup_router)  # 清理任务 API
 
 # 静态文件服务 - 输出文件下载
 app.mount("/outputs", StaticFiles(directory=str(OUTPUTS_DIR)), name="outputs")

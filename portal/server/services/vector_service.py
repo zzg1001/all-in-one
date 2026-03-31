@@ -508,9 +508,16 @@ class VectorService:
 _vector_service: Optional[VectorService] = None
 
 
-def get_vector_service() -> VectorService:
-    """获取向量服务实例"""
+def get_vector_service() -> Optional[VectorService]:
+    """获取向量服务实例，如果向量数据库未启用则返回 None"""
     global _vector_service
+
+    # 检查是否启用向量数据库
+    from config import get_settings
+    settings = get_settings()
+    if not settings.vector_db_enabled:
+        return None
+
     if _vector_service is None:
         _vector_service = VectorService()
     return _vector_service

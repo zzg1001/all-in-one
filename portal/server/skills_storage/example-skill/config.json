@@ -1,9 +1,0 @@
-{
-    "name": "example-skill",
-    "description": "示例技能 - 展示如何编写技能脚本",
-    "icon": "🎯",
-    "tags": ["示例", "教程"],
-    "author": "system",
-    "version": "1.0.0",
-    "entry_script": "main.py"
-}

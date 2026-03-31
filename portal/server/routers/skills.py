@@ -35,7 +35,10 @@ async def get_skills(
         q: 搜索关键词（搜索名称和描述）
         dept: 部门名称，过滤包含 "dept:{部门名}" 或 "public" 标签的技能
     """
-    query = db.query(Skill).filter(Skill.status == "active")
+    query = db.query(Skill).filter(
+        Skill.status == "active",
+        Skill.deleted_at.is_(None)  # 排除软删除的记录
+    )
 
     # 搜索过滤
     if q and q.strip():
@@ -61,7 +64,10 @@ async def get_skills(
 @router.get("/by-name/{name}", response_model=SkillResponse)
 async def get_skill_by_name(name: str, db: Session = Depends(get_db)):
     """根据名称获取技能"""
-    skill = db.query(Skill).filter(Skill.name == name).first()
+    skill = db.query(Skill).filter(
+        Skill.name == name,
+        Skill.deleted_at.is_(None)
+    ).first()
     if not skill:
         raise HTTPException(status_code=404, detail=f"技能 '{name}' 不存在")
     return skill
@@ -70,7 +76,10 @@ async def get_skill_by_name(name: str, db: Session = Depends(get_db)):
 @router.get("/{skill_id}", response_model=SkillResponse)
 async def get_skill(skill_id: str, db: Session = Depends(get_db)):
     """获取单个技能"""
-    skill = db.query(Skill).filter(Skill.id == skill_id).first()
+    skill = db.query(Skill).filter(
+        Skill.id == skill_id,
+        Skill.deleted_at.is_(None)
+    ).first()
     if not skill:
         raise HTTPException(status_code=404, detail="技能不存在")
     return skill
@@ -138,6 +147,10 @@ async def create_skill(skill_data: SkillCreate, db: Session = Depends(get_db)):
     }
     config_path = skill_folder / "config.json"
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # 同步到 MinIO（双写）
+    from services.storage.utils import sync_skill_folder_to_minio
+    await sync_skill_folder_to_minio(skill_folder, skill_id)
 
     # 新建技能，group_id = id（首个版本）
     skill = Skill(
@@ -357,29 +370,29 @@ async def upload_skill(
 
     # 生成 UUID
     skill_id = str(uuid.uuid4())
+    temp_folder = TEMP_SKILLS_STORAGE_DIR / f"upload_{skill_id}"
     skill_folder = SKILLS_STORAGE_DIR / skill_id
 
     try:
-        # 保存并解压 ZIP 文件
-        temp_zip = SKILLS_STORAGE_DIR / f"temp_{skill_id}.zip"
+        # 1. 解压到临时目录
+        temp_zip = TEMP_SKILLS_STORAGE_DIR / f"temp_{skill_id}.zip"
         content = await file.read()
         temp_zip.write_bytes(content)
 
-        # 解压到技能文件夹
-        skill_folder.mkdir(parents=True, exist_ok=True)
+        temp_folder.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
-            zip_ref.extractall(skill_folder)
+            zip_ref.extractall(temp_folder)
 
         # 删除临时 ZIP
         temp_zip.unlink()
 
         # 检查是否有嵌套文件夹（常见的 ZIP 打包方式）
-        items = list(skill_folder.iterdir())
+        items = list(temp_folder.iterdir())
         if len(items) == 1 and items[0].is_dir():
             # 将内容移动到上层
             nested_folder = items[0]
             for item in nested_folder.iterdir():
-                shutil.move(str(item), str(skill_folder / item.name))
+                shutil.move(str(item), str(temp_folder / item.name))
             nested_folder.rmdir()
 
         # 解析标签
@@ -391,7 +404,7 @@ async def upload_skill(
                 tags_list = [t.strip() for t in tags.split(",") if t.strip()]
 
         # 尝试从 config.json 读取额外信息（但不覆盖 author，保持上传标记）
-        config_file = skill_folder / "config.json"
+        config_file = temp_folder / "config.json"
         if config_file.exists():
             try:
                 config = json.loads(config_file.read_text(encoding="utf-8"))
@@ -408,6 +421,34 @@ async def upload_skill(
                     entry_script = config["entry_script"]
             except Exception:
                 pass
+
+        # 2. 先写 MinIO（主存储），失败则报错
+        from services.storage.utils import is_minio_storage, get_storage_backend
+        import mimetypes
+        if is_minio_storage("skills"):
+            try:
+                storage = get_storage_backend("skills")
+                for file_path in temp_folder.rglob("*"):
+                    if file_path.is_file():
+                        rel_path = file_path.relative_to(temp_folder)
+                        minio_path = f"{skill_id}/{rel_path}"
+                        file_content = file_path.read_bytes()
+                        content_type, _ = mimetypes.guess_type(str(file_path))
+                        await storage.write_file(minio_path, file_content, content_type)
+                print(f"[Skills] MinIO 写入成功: {skill_id}")
+            except Exception as e:
+                print(f"[Skills] MinIO 上传失败: {e}")
+                raise HTTPException(status_code=500, detail=f"文件上传失败: {e}")
+
+        # 3. 再写本地（缓存），失败不影响
+        try:
+            shutil.copytree(temp_folder, skill_folder)
+            print(f"[Skills] 本地写入成功: {skill_folder}")
+        except Exception as e:
+            print(f"[Skills] 本地写入失败（不影响上传）: {e}")
+
+        # 清理临时目录
+        shutil.rmtree(temp_folder, ignore_errors=True)
 
         # 创建数据库记录 - 上传的 skill 强制 author='uploaded'
         skill = Skill(
@@ -431,12 +472,14 @@ async def upload_skill(
 
         return skill
 
+    except HTTPException:
+        # 清理临时目录
+        shutil.rmtree(temp_folder, ignore_errors=True)
+        raise
     except Exception as e:
         # 清理失败的上传
-        if skill_folder.exists():
-            shutil.rmtree(skill_folder)
-        if temp_zip.exists():
-            temp_zip.unlink()
+        shutil.rmtree(temp_folder, ignore_errors=True)
+        shutil.rmtree(skill_folder, ignore_errors=True)
         raise HTTPException(status_code=500, detail=f"上传失败: {str(e)}")
 
 
@@ -515,6 +558,10 @@ async def update_skill(
         config_path = skill_folder / "config.json"
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
 
+        # 同步到 MinIO（双写）
+        from services.storage.utils import sync_skill_folder_to_minio
+        await sync_skill_folder_to_minio(skill_folder, old_skill.folder_path)
+
         # 直接更新数据库记录
         if "name" in update_data:
             old_skill.name = update_data["name"]
@@ -582,6 +629,10 @@ async def update_skill(
     }
     config_path = new_skill_folder / "config.json"
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # 同步新版本文件夹到 MinIO（双写）
+    from services.storage.utils import sync_skill_folder_to_minio
+    await sync_skill_folder_to_minio(new_skill_folder, new_skill_id)
 
     # 创建新版本记录
     new_skill = Skill(
@@ -651,6 +702,15 @@ async def update_skill_folder(
                 shutil.move(str(item), str(skill_folder / item.name))
             nested_folder.rmdir()
 
+        # 同步到 MinIO（双写，先删旧的再上传新的）
+        from services.storage.utils import sync_skill_folder_to_minio, is_minio_storage, get_storage_backend
+        if is_minio_storage("skills"):
+            # 删除 MinIO 中的旧文件
+            storage = get_storage_backend("skills")
+            await storage.rmdir(skill_id)
+        # 上传新文件
+        await sync_skill_folder_to_minio(skill_folder, skill_id)
+
         # 更新 folder_path
         skill.folder_path = skill_id
         db.commit()
@@ -664,24 +724,29 @@ async def update_skill_folder(
 
 @router.delete("/{skill_id}", status_code=204)
 async def delete_skill(skill_id: str, db: Session = Depends(get_db)):
-    """删除技能（删除所有版本的数据库记录和文件夹）"""
-    skill = db.query(Skill).filter(Skill.id == skill_id).first()
+    """软删除技能（标记 deleted_at，物理文件由清理任务异步删除）"""
+    from datetime import datetime
+
+    skill = db.query(Skill).filter(
+        Skill.id == skill_id,
+        Skill.deleted_at.is_(None)  # 只能删除未删除的
+    ).first()
     if not skill:
         raise HTTPException(status_code=404, detail="技能不存在")
 
-    # 获取同一版本组的所有技能
-    all_versions = db.query(Skill).filter(Skill.group_id == skill.group_id).all()
+    now = datetime.now()
 
-    # 删除所有版本的文件夹
+    # 软删除同一版本组的所有技能
+    all_versions = db.query(Skill).filter(
+        Skill.group_id == skill.group_id,
+        Skill.deleted_at.is_(None)
+    ).all()
+
     for version in all_versions:
-        if version.folder_path:
-            skill_folder = SKILLS_STORAGE_DIR / version.folder_path
-            if skill_folder.exists():
-                shutil.rmtree(skill_folder)
-        # 删除数据库记录
-        db.delete(version)
+        version.deleted_at = now
 
     db.commit()
+    print(f"[Skills] 软删除: {skill.name} (group_id={skill.group_id}, 共 {len(all_versions)} 个版本)")
     return None
 
 

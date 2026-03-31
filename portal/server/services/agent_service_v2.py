@@ -3,6 +3,10 @@
 
 import json
 import asyncio
+import os
+import sys
+import subprocess
+import time
 from pathlib import Path
 from typing import AsyncIterator, Optional, List, Dict, Any
 
@@ -105,13 +109,19 @@ async def execute_skill_tool(args):
             import subprocess
             import sys
 
+            # 设置 PYTHONIOENCODING 确保子进程使用 UTF-8 输出
+            env = os.environ.copy()
+            env['PYTHONIOENCODING'] = 'utf-8'
+
             result = subprocess.run(
                 [sys.executable, str(script_path), json.dumps(params)],
                 capture_output=True,
                 text=True,
                 timeout=120,
                 cwd=str(skill_folder),
-                encoding='utf-8'
+                encoding='utf-8',
+                errors='replace',
+                env=env,
             )
 
             return {
@@ -314,7 +324,9 @@ class AgentServiceV2:
 
         # RAG: 从向量数据库检索相关上下文
         rag_context = ""
-        if enable_rag and (agent_id or user_id):
+        from config import get_settings
+        settings = get_settings()
+        if enable_rag and settings.vector_db_enabled and (agent_id or user_id):
             try:
                 from services.vector_service import get_vector_service
                 vector_service = get_vector_service()
@@ -477,8 +489,10 @@ class AgentServiceV2:
                                 return
 
                             # 执行脚本
+                            # 保留必要的环境变量，但设置 PYTHONIOENCODING=utf-8
                             clean_env = {k: v for k, v in __import__('os').environ.items()
                                         if not k.startswith('PYTHON') and k != '__PYVENV_LAUNCHER__'}
+                            clean_env['PYTHONIOENCODING'] = 'utf-8'
 
                             result = subprocess.run(
                                 [sys.executable, str(script_path), input_file],
@@ -487,7 +501,8 @@ class AgentServiceV2:
                                 timeout=120,
                                 cwd=str(SKILLS_STORAGE_DIR / skill.folder_path),
                                 env=clean_env,
-                                encoding='utf-8'
+                                encoding='utf-8',
+                                errors='replace',
                             )
 
                             if result.returncode == 0:
@@ -596,23 +611,23 @@ class AgentServiceV2:
 
             try:
                 # 执行 main.py，传递包含配置的参数
+                # 设置 PYTHONIOENCODING 确保子进程使用 UTF-8 输出
+                env = os.environ.copy()
+                env['PYTHONIOENCODING'] = 'utf-8'
+
                 result = subprocess.run(
                     [sys.executable, str(main_script), json.dumps(params_with_config)],
                     capture_output=True,
+                    text=True,
+                    encoding='utf-8',
+                    errors='replace',
                     timeout=180,
                     cwd=str(skill_folder),
+                    env=env,
                 )
 
-                # 安全解码输出
-                try:
-                    stdout = result.stdout.decode('utf-8', errors='replace').strip() if result.stdout else ""
-                except:
-                    stdout = str(result.stdout) if result.stdout else ""
-
-                try:
-                    stderr = result.stderr.decode('utf-8', errors='replace').strip() if result.stderr else ""
-                except:
-                    stderr = str(result.stderr) if result.stderr else ""
+                stdout = result.stdout.strip() if result.stdout else ""
+                stderr = result.stderr.strip() if result.stderr else ""
 
                 print(f"[AgentServiceV2] 执行完成, returncode={result.returncode}")
                 print(f"[AgentServiceV2] stdout: {stdout[:500] if stdout else 'None'}")
@@ -638,12 +653,53 @@ class AgentServiceV2:
                             pass
 
                 if output_data:
+                    # 获取输出文件信息
+                    output_file_info = output_data.get("_output_file")
+
+                    # 优先使用 main.py 返回的文件信息
+                    if output_file_info:
+                        from services.storage.utils import upload_local_file_to_storage_sync
+                        from pathlib import Path as P
+
+                        original_path = output_file_info.get("path")
+                        if original_path and P(original_path).exists():
+                            # 文件存在，直接上传到存储
+                            print(f"[AgentServiceV2] 使用 main.py 返回的文件: {original_path}")
+                            try:
+                                output_file_info = upload_local_file_to_storage_sync(P(original_path))
+                            except Exception as e:
+                                print(f"[AgentServiceV2] 上传到存储失败: {e}")
+                                # 保持原有的 output_file_info 不变
+                        else:
+                            # 文件路径无效，扫描最近生成的文件作为 fallback
+                            print(f"[AgentServiceV2] 原文件不存在: {original_path}，扫描最近文件")
+                            import time as time_module
+                            found = False
+                            for ext in ['.pdf', '.xlsx', '.csv', '.json', '.png', '.html', '.docx', '.pptx']:
+                                if found:
+                                    break
+                                for f in OUTPUTS_DIR.glob(f"*{ext}"):
+                                    if time_module.time() - f.stat().st_mtime < 60:
+                                        try:
+                                            output_file_info = upload_local_file_to_storage_sync(f)
+                                            found = True
+                                        except Exception as e:
+                                            print(f"[AgentServiceV2] 上传到存储失败: {e}")
+                                            output_file_info = {
+                                                "path": str(f),
+                                                "name": f.name,
+                                                "type": ext[1:],
+                                                "url": f"/outputs/{f.name}"
+                                            }
+                                            found = True
+                                        break
+
                     return {
                         "success": output_data.get("success", True),
                         "error": output_data.get("error"),
                         "output": output_data.get("output") or output_data.get("_prefix_output") or stdout,
                         "result": output_data.get("result"),
-                        "_output_file": output_data.get("_output_file")
+                        "_output_file": output_file_info
                     }
                 else:
                     # 非 JSON 输出

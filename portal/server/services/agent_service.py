@@ -29,6 +29,46 @@ OUTPUTS_DIR = get_outputs_dir()
 SERVER_DIR = get_server_dir()
 
 
+def _create_output_file_info(file_path: Path, file_type: str = None) -> Dict[str, Any]:
+    """
+    创建输出文件信息，并根据配置上传到存储。
+    如果配置为 MinIO，会自动上传文件并返回 MinIO URL。
+    """
+    if not file_path.exists():
+        return None
+
+    # 自动检测文件类型
+    if file_type is None:
+        ext = file_path.suffix.lower()
+        file_type_map = {
+            '.json': 'json', '.xlsx': 'excel', '.xls': 'excel',
+            '.csv': 'csv', '.pdf': 'pdf', '.html': 'html',
+            '.png': 'image', '.jpg': 'image', '.jpeg': 'image',
+            '.gif': 'image', '.svg': 'image', '.txt': 'text',
+            '.md': 'markdown', '.docx': 'word', '.pptx': 'pptx'
+        }
+        file_type = file_type_map.get(ext, 'file')
+
+    # 检查是否需要上传到 MinIO
+    if settings.storage_type == "minio":
+        try:
+            from services.storage.utils import upload_local_file_to_storage_sync
+            result = upload_local_file_to_storage_sync(file_path)
+            return result
+        except Exception as e:
+            print(f"[Output] 上传到存储失败: {e}, 使用本地路径")
+
+    # 本地存储模式或上传失败时使用本地路径
+    return {
+        "path": str(file_path),
+        "type": file_type,
+        "name": file_path.name,
+        "url": f"/outputs/{file_path.name}",
+        "size": file_path.stat().st_size,
+        "storage": "local"
+    }
+
+
 class AgentService:
     def __init__(self, db: Session):
         self.db = db
@@ -87,7 +127,7 @@ class AgentService:
             skill_ids: List of skill IDs to filter by
             load_full_content: If True, load full SKILL.md content for each skill
         """
-        query = self.db.query(Skill)
+        query = self.db.query(Skill).filter(Skill.deleted_at.is_(None))
         if skill_ids:
             query = query.filter(Skill.id.in_(skill_ids))
         skills = query.all()
@@ -102,17 +142,46 @@ class AgentService:
             if skill.folder_path:
                 skill_folder = SKILLS_STORAGE_DIR / skill.folder_path
                 skill_md_path = skill_folder / "SKILL.md"
+                skill_md_content = None
+
+                # 1. 先尝试读本地
                 if skill_md_path.exists():
                     try:
+                        skill_md_content = skill_md_path.read_text(encoding="utf-8")
+                    except Exception:
+                        pass
+
+                # 2. 本地没有，从 MinIO 拉取
+                if not skill_md_content:
+                    try:
+                        from services.storage.utils import is_minio_storage, get_storage_backend
+                        if is_minio_storage("skills"):
+                            import asyncio
+                            storage = get_storage_backend("skills")
+                            minio_path = f"{skill.folder_path}/SKILL.md"
+                            # 同步方式读取
+                            loop = asyncio.new_event_loop()
+                            try:
+                                content_bytes = loop.run_until_complete(storage.read_file(minio_path))
+                                skill_md_content = content_bytes.decode("utf-8")
+                                # 缓存到本地
+                                skill_md_path.parent.mkdir(parents=True, exist_ok=True)
+                                skill_md_path.write_text(skill_md_content, encoding="utf-8")
+                                print(f"[Skills] 从 MinIO 拉取 SKILL.md: {skill.folder_path}")
+                            finally:
+                                loop.close()
+                    except Exception as e:
+                        print(f"[Skills] 读取 SKILL.md 失败 ({skill.folder_path}): {e}")
+
+                # 解析 YAML front matter
+                if skill_md_content and skill_md_content.startswith("---"):
+                    try:
                         import yaml
-                        content = skill_md_path.read_text(encoding="utf-8")
-                        # 解析 YAML front matter
-                        if content.startswith("---"):
-                            parts = content.split("---", 2)
-                            if len(parts) >= 3:
-                                front_matter = yaml.safe_load(parts[1])
-                                if front_matter and "description" in front_matter:
-                                    description = front_matter["description"]
+                        parts = skill_md_content.split("---", 2)
+                        if len(parts) >= 3:
+                            front_matter = yaml.safe_load(parts[1])
+                            if front_matter and "description" in front_matter:
+                                description = front_matter["description"]
                     except Exception:
                         pass
 
@@ -123,16 +192,9 @@ class AgentService:
                 info += f", Tags: {', '.join(skill.tags)}"
             skills_info.append(info)
 
-            # Load full SKILL.md content if requested
-            if load_full_content and skill.folder_path:
-                skill_folder = SKILLS_STORAGE_DIR / skill.folder_path
-                skill_md_path = skill_folder / "SKILL.md"
-                if skill_md_path.exists():
-                    try:
-                        skill_md_content = skill_md_path.read_text(encoding="utf-8")
-                        skills_info.append(f"\n--- Full content for {skill.name} ---\n{skill_md_content}\n---\n")
-                    except Exception:
-                        pass
+            # Load full SKILL.md content if requested (复用上面已读取的内容)
+            if load_full_content and skill.folder_path and skill_md_content:
+                skills_info.append(f"\n--- Full content for {skill.name} ---\n{skill_md_content}\n---\n")
 
         return "Available skills:\n" + "\n".join(skills_info)
 
@@ -455,14 +517,7 @@ print(r'{output_path}')
             Path(script_path).unlink(missing_ok=True)
 
             if result.returncode == 0 and output_path.exists():
-                file_size = output_path.stat().st_size
-                return {
-                    "path": str(output_path),
-                    "type": "png",
-                    "name": output_path.name,
-                    "url": f"/outputs/{output_path.name}",
-                    "size": file_size
-                }
+                return _create_output_file_info(output_path, "image")
         except Exception as e:
             print(f"[Image Code] Execution failed: {e}")
 
@@ -535,14 +590,7 @@ OUTPUT_PATH = r'{output_path}'
             Path(script_path).unlink(missing_ok=True)
 
             if result.returncode == 0 and output_path.exists():
-                file_size = output_path.stat().st_size
-                return {
-                    "path": str(output_path),
-                    "type": "png",
-                    "name": output_filename,
-                    "url": f"/outputs/{output_filename}",
-                    "size": file_size
-                }
+                return _create_output_file_info(output_path, "image")
             else:
                 print(f"[Img Process] Execution failed: {result.stderr}")
 
@@ -707,25 +755,13 @@ const pptxgen = require("pptxgenjs");
             # 检查输出文件是否生成
             if output_path.exists():
                 print(f"[PPTX Code] Success! File created: {output_path}")
-                return {
-                    "path": str(output_path),
-                    "type": "pptx",
-                    "name": output_filename,
-                    "url": f"/outputs/{output_filename}",
-                    "size": output_path.stat().st_size
-                }
+                return _create_output_file_info(output_path, "pptx")
             else:
                 # 查找 outputs 目录下任何新生成的 .pptx 文件
                 for pptx_file in OUTPUTS_DIR.glob("*.pptx"):
                     if pptx_file.stat().st_mtime > timestamp - 5:  # 5秒内创建的
                         print(f"[PPTX Code] Found generated file: {pptx_file}")
-                        return {
-                            "path": str(pptx_file),
-                            "type": "pptx",
-                            "name": pptx_file.name,
-                            "url": f"/outputs/{pptx_file.name}",
-                            "size": pptx_file.stat().st_size
-                        }
+                        return _create_output_file_info(pptx_file, "pptx")
 
                 print(f"[PPTX Code] Failed: No output file found")
                 print(f"[PPTX Code] stderr: {result.stderr}")
@@ -3765,22 +3801,13 @@ const pptxgen = require("pptxgenjs");
                     print(f"[Agent Loop] stderr: {result.stderr[:500] if result.stderr else 'None'}")
 
                     if result.returncode == 0:
-                        # 检查是否生成了文件
+                        # 检查是否生成了文件，并自动上传到存储
                         output_file = None
-                        for ext in ['.json', '.xlsx', '.csv', '.pdf', '.html']:
+                        for ext in ['.json', '.xlsx', '.csv', '.pdf', '.html', '.png', '.jpg']:
                             for f in OUTPUTS_DIR.glob(f"*{ext}"):
                                 mtime = f.stat().st_mtime
                                 if time.time() - mtime < 30:
-                                    file_type = {
-                                        '.json': 'json', '.xlsx': 'excel', '.csv': 'csv',
-                                        '.pdf': 'pdf', '.html': 'html'
-                                    }.get(ext, 'file')
-                                    output_file = {
-                                        "path": str(f),
-                                        "type": file_type,
-                                        "name": f.name,
-                                        "url": f"/outputs/{f.name}"
-                                    }
+                                    output_file = _create_output_file_info(f)
                                     break
                             if output_file:
                                 break
