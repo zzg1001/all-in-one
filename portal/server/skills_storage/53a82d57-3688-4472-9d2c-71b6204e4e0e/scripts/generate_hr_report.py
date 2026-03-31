@@ -30,7 +30,8 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')
-plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
+# 支持 Linux/Windows/macOS 的中文字体
+plt.rcParams['font.sans-serif'] = ['WenQuanYi Micro Hei', 'WenQuanYi Zen Hei', 'SimHei', 'Microsoft YaHei', 'PingFang SC', 'Arial Unicode MS']
 plt.rcParams['axes.unicode_minus'] = False
 import io
 
@@ -52,11 +53,18 @@ COLORS = {
 # ==================== 字体注册 ====================
 def register_chinese_font():
     font_paths = [
+        # Linux (Docker/Debian/Ubuntu)
+        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+        '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
+        '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf',
+        # Windows
         'C:/Windows/Fonts/msyh.ttc',
         'C:/Windows/Fonts/simhei.ttf',
         'C:/Windows/Fonts/simsun.ttc',
+        # macOS
         '/System/Library/Fonts/PingFang.ttc',
-        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+        '/System/Library/Fonts/STHeiti Light.ttc',
     ]
     for font_path in font_paths:
         if os.path.exists(font_path):

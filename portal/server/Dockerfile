@@ -2,6 +2,15 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Install Chinese fonts for PDF generation
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    fonts-wqy-microhei \
+    fonts-wqy-zenhei \
+    fontconfig \
+    && fc-cache -fv \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install dependencies
 COPY requirements.txt .
 RUN pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple && \
