@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, nextTick, onMounted, computed, watch } from 'vue'
-import { dataNotesApi, type DataNote } from '@/api'
+import { dataNotesApi, agentApi, type DataNote } from '@/api'
 import config from '@/config'
 
 const props = defineProps<{
@@ -556,13 +556,7 @@ const uploadFiles = async (files: File[]) => {
     for (const file of files) {
       try {
         // 上传文件到服务器
-        const formData = new FormData()
-        formData.append('file', file)
-        const res = await fetch(`${config.serverBaseUrl}/api/upload`, {
-          method: 'POST',
-          body: formData
-        })
-        const data = await res.json()
+        const data = await agentApi.upload(file)
 
         if (data.url) {
           // 创建便签（关联到当前 Agent）
