@@ -1662,6 +1662,16 @@ def generate_output_file(
             print(f"[OutputFile] Skill requested no output file via _no_output_file marker")
             return None
 
+        # 检查是否标记跳过文件生成
+        if execution_result.get("_skip_file_generation"):
+            print(f"[OutputFile] Skill requested skip file generation via _skip_file_generation marker")
+            return None
+
+        # 检查 success=False 的情况，不生成文件
+        if execution_result.get("success") is False:
+            print(f"[OutputFile] Skill returned success=False, skip file generation")
+            return None
+
         # 检查是否有 _output_file 标记
         if "_output_file" in execution_result:
             output_info = execution_result["_output_file"]

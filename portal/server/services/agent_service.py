@@ -1145,6 +1145,14 @@ def save_data(data, name=None, format='csv'):
             stderr_output = sys.stderr.getvalue()
             result = exec_globals.get("result", None)
 
+            # 检查skill返回的success字段
+            if isinstance(result, dict) and result.get("success") is False:
+                # skill明确返回失败，传递错误信息
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
+                error_msg = result.get("error") or result.get("message") or "技能执行失败"
+                return False, result, error_msg, output
+
             # 后处理：如果结果是文件路径字符串，转换为标准格式
             if isinstance(result, str) and result:
                 result_path = Path(result)
@@ -3761,7 +3769,9 @@ const pptxgen = require("pptxgenjs");
                     else:
                         input_file = fp
 
-                if not input_file:
+                # 检查skill是否要求必须有输入文件
+                file_required = config_data.get("parameters", {}).get("file_path", {}).get("required", True)
+                if not input_file and file_required:
                     yield json.dumps({"type": "error", "message": "请上传文件"})
                     return
 
@@ -3784,9 +3794,20 @@ const pptxgen = require("pptxgenjs");
                     clean_env = {k: v for k, v in os.environ.items()
                                 if not k.startswith('PYTHON') and k != '__PYVENV_LAUNCHER__'}
 
+                    # 构建参数JSON
+                    script_params = {
+                        "file_path": input_file,
+                        "agent_id": skill.id if hasattr(skill, 'id') else None,
+                        "context": user_input
+                    }
+                    params_json = json.dumps(script_params, ensure_ascii=False)
+
+                    # 构建命令行参数
+                    cmd_args = [sys.executable, str(script_path), params_json]
+
                     result = await asyncio.to_thread(
                         lambda: subprocess.run(
-                            [sys.executable, str(script_path), input_file],
+                            cmd_args,
                             capture_output=True,
                             text=True,
                             timeout=120,
