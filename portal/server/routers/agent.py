@@ -99,46 +99,66 @@ async def chat_stream(
     )
     log_ai_start(request.message[:100])
 
-    # RAG: 从向量数据库检索相关内容
-    rag_context = ""
-    from config import get_settings
-    settings = get_settings()
+    # 构建带上下文的消息
+    message_with_context = request.message
 
-    # 检查向量数据库是否启用
-    if request.enable_rag and settings.vector_db_enabled and (request.agent_id or user_id):
+    # 检查是否是老板视角Agent - 获取所有部门数据
+    # 使用延迟导入避免循环依赖
+    from services.boss_view_service import is_boss_view_agent, get_all_department_data, build_boss_view_prompt
+
+    if request.agent_id and is_boss_view_agent(db, request.agent_id):
+        log_info(f"[BossView] 检测到老板视角Agent，开始获取所有部门数据...")
         try:
-            # 使用延迟导入避免循环依赖
-            import importlib.util
-            import os
-            module_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'services', 'vector_service.py')
-            spec = importlib.util.spec_from_file_location('vector_service', module_path)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            vector_service = module.get_vector_service()
-
-            if vector_service:
-                log_info(f"RAG 检索: query={request.message[:50]}..., agent_id={request.agent_id}, user_id={user_id}")
-                rag_context = await vector_service.get_context_for_chat(
-                    query=request.message,
-                    agent_id=request.agent_id,
-                    user_id=user_id,
-                    max_context_length=4000
-                )
-                if rag_context:
-                    log_info(f"RAG 检索到 {len(rag_context)} 字符的相关内容")
-                else:
-                    log_info("RAG 检索: 未找到相关内容")
+            department_data = await get_all_department_data(db, user_id)
+            message_with_context = build_boss_view_prompt(department_data, request.message)
+            if department_data:
+                log_info(f"[BossView] 获取到 {len(department_data)} 字符的部门数据")
             else:
-                log_info("RAG: vector_service 为 None")
+                log_info("[BossView] 未找到部门数据")
         except Exception as e:
             import traceback
-            log_error(f"RAG 检索失败: {str(e)[:100]}")
+            log_error(f"[BossView] 获取部门数据失败: {str(e)[:100]}")
             traceback.print_exc()
+    else:
+        # 普通Agent: 使用RAG从向量数据库检索相关内容
+        rag_context = ""
+        from config import get_settings
+        settings = get_settings()
 
-    # 构建带 RAG 上下文的消息
-    message_with_context = request.message
-    if rag_context:
-        message_with_context = f"""## 从知识库检索到的相关数据
+        # 检查向量数据库是否启用
+        if request.enable_rag and settings.vector_db_enabled and (request.agent_id or user_id):
+            try:
+                # 使用延迟导入避免循环依赖
+                import importlib.util
+                import os
+                module_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'services', 'vector_service.py')
+                spec = importlib.util.spec_from_file_location('vector_service', module_path)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                vector_service = module.get_vector_service()
+
+                if vector_service:
+                    log_info(f"RAG 检索: query={request.message[:50]}..., agent_id={request.agent_id}, user_id={user_id}")
+                    rag_context = await vector_service.get_context_for_chat(
+                        query=request.message,
+                        agent_id=request.agent_id,
+                        user_id=user_id,
+                        max_context_length=4000
+                    )
+                    if rag_context:
+                        log_info(f"RAG 检索到 {len(rag_context)} 字符的相关内容")
+                    else:
+                        log_info("RAG 检索: 未找到相关内容")
+                else:
+                    log_info("RAG: vector_service 为 None")
+            except Exception as e:
+                import traceback
+                log_error(f"RAG 检索失败: {str(e)[:100]}")
+                traceback.print_exc()
+
+        # 构建带 RAG 上下文的消息
+        if rag_context:
+            message_with_context = f"""## 从知识库检索到的相关数据
 
 以下是从用户的文件管理（File Manage）中检索到的相关内容：
 
