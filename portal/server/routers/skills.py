@@ -312,9 +312,7 @@ async def _analyze_skill_with_ai(code_contents: dict, config_data: dict) -> dict
 }}"""
 
     try:
-        client_kwargs = {"api_key": settings.anthropic_api_key}
-        if settings.anthropic_base_url:
-            client_kwargs["base_url"] = settings.anthropic_base_url
+        client_kwargs = settings.get_anthropic_client_kwargs()
         client = anthropic.Anthropic(**client_kwargs)
 
         response = client.messages.create(

@@ -166,9 +166,9 @@ DB_USER=root
 DB_PASSWORD=your_password
 DB_NAME=product_background
 
-# AI 模型
-ANTHROPIC_API_KEY=your_key
-ANTHROPIC_BASE_URL=        # Azure 代理 URL (可选)
+# AI 模型 (Azure 代理)
+ANTHROPIC_AUTH_TOKEN=your_azure_token
+ANTHROPIC_BASE_URL=https://your-azure-proxy-url
 CLAUDE_MODEL=claude-opus-4-5
 
 # 调试
@@ -211,10 +211,32 @@ VITE_API_BASE_URL=http://localhost:8001/api
 // Do: messages.value[i] = { ...messages.value[i], skillPlan: plan }
 ```
 
-### AI Skill Planning
-```
-<!--SKILL_PLAN:[{"skill":"skill-name","action":"description","exists":true/false}]-->
-```
-
 ### SSE Streaming
 AI responses use Server-Sent Events. Frontend uses `AsyncGenerator` pattern in `agentApi.chatStream()`.
+
+## Agent Architecture (Claude Agent SDK)
+
+基于 Claude Agent SDK 的 Agent 服务，类似 Claude CLI 的工作方式：
+
+### 核心原则
+- **一切交给 SDK 处理**：不再遇事不决就调用 skill
+- **不自动生成 skill**：去掉没有 skill 就自动生成的逻辑
+- **直接用工具解决问题**：使用 SDK 内置工具（Bash, Read, Write, Edit, Glob, Grep）
+
+### 工作流程
+1. 用户发送请求到 `/api/agent/chat/stream`
+2. AgentSDKService 构建系统提示，包含工作目录信息
+3. Claude Agent SDK 自动使用工具完成任务
+4. 流式返回结果给前端
+
+### 可用工具
+- **Bash**: 执行命令行操作
+- **Read**: 读取文件内容
+- **Write**: 创建或覆盖文件
+- **Edit**: 编辑现有文件
+- **Glob**: 按模式搜索文件
+- **Grep**: 搜索文件内容
+
+### 保留的技能功能
+- 已存在的技能（有 main.py 或 SKILL.md）仍可通过 `/api/agent/execute` 执行
+- 技能作为可复用的工具，而不是 AI 解决问题的唯一方式

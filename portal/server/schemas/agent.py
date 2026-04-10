@@ -13,6 +13,7 @@ class ChatRequest(BaseModel):
     skill_ids: Optional[List[str]] = None  # Available skills for this conversation
     agent_id: Optional[str] = None  # Agent ID for RAG data isolation
     enable_rag: bool = True  # Enable RAG retrieval from vector database
+    file_paths: Optional[List[str]] = None  # Uploaded file paths for SDK Tool Use
 
 
 class ChatResponse(BaseModel):

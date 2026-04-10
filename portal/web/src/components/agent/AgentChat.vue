@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, computed, onUnmounted, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { agentApi, dataNotesApi, agentLoopApi, type ChatMessage, type DataNote, type SkillChatRequest, type SkillChatEvent, type SkillExecuteInteractiveRequest, type SkillExecuteInteractiveEvent, type ExecutionStep, type AgentLoopRequest, type AgentLoopEvent, type AgentLoopMessage, type ToolCall } from '@/api'
+import { agentApi, dataNotesApi, agentLoopApi, type ChatMessage, type DataNote, type SkillChatRequest, type SkillChatEvent, type SkillExecuteInteractiveRequest, type SkillExecuteInteractiveEvent, type ExecutionStep, type AgentLoopRequest, type AgentLoopEvent, type AgentLoopMessage, type ToolCall, type ChatStreamEvent } from '@/api'
 import config from '@/config'
 import SlashCommandPopup from './SlashCommandPopup.vue'
 import ChatHistory from './ChatHistory.vue'
@@ -237,6 +237,8 @@ interface UploadedFile {
   uploadError?: string  // 上传错误
 }
 const uploadedFiles = ref<UploadedFile[]>([])
+// 会话级别的文件列表 - 保存本次会话中所有用过的文件路径，后续对话可以继续使用
+const sessionFilePaths = ref<string[]>([])
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const isDragOverInput = ref(false)
 
@@ -774,6 +776,7 @@ const clearConversation = () => {
 
   // 清空上传的文件和内联引用
   uploadedFiles.value = []
+  sessionFilePaths.value = []  // 新会话，清空会话文件
   inlineRefMap.value.clear()
 
   // 清空上下文
@@ -847,6 +850,7 @@ const loadSession = async (session: ChatSession) => {
 
     // 重置其他状态
     uploadedFiles.value = []
+    sessionFilePaths.value = []  // 切换会话，清空会话文件
     inlineRefMap.value.clear()
     contextStore.clearAll()
     collapsedGroups.value.clear()
@@ -4503,11 +4507,10 @@ const sendMessage = async () => {
   // 创建 AbortController
   abortController = new AbortController()
 
-  // 构建聊天历史（排除刚添加的用户消息）
+  // 构建聊天历史（排除刚添加的用户消息）- 保留整个会话的上下文
   const history: ChatMessage[] = messages.value
     .filter(m => m.type === 'user' || m.type === 'agent')
     .slice(0, -1) // 排除当前用户消息
-    .slice(-10) // 保留最近10条消息
     .map(m => ({
       role: m.type === 'user' ? 'user' as const : 'assistant' as const,
       content: m.content
@@ -4533,31 +4536,101 @@ const sendMessage = async () => {
     // 构建上下文
     const context = contextStore.toApiContext
 
-    // 调用后端 AI 聊天接口（流式）+ 打字机效果 + RAG
-    for await (const chunk of agentApi.chatStream(
+    // 获取当前消息的文件路径
+    const currentFilePaths = allFilesForAI
+      .filter(f => f.serverPath)
+      .map(f => f.serverPath as string)
+
+    // 保存到会话文件列表（去重）
+    for (const fp of currentFilePaths) {
+      if (!sessionFilePaths.value.includes(fp)) {
+        sessionFilePaths.value.push(fp)
+      }
+    }
+
+    // 使用会话中所有文件（包括之前上传的）
+    const filePaths = [...sessionFilePaths.value]
+    console.log('[sendMessage] file_paths (session):', filePaths)
+
+    // 初始化 skillPlan（用于展示技能执行过程）
+    let skillStepId = 0
+
+    // 调用后端 AI 聊天接口（流式）+ 打字机效果 + RAG + Tool Use
+    for await (const event of agentApi.chatStream(
       {
         message: userInput,
         history,
         skill_ids: skillIds,
         context: context.length > 0 ? context : undefined,
         agent_id: props.agentId,  // For RAG data isolation
-        enable_rag: true
+        enable_rag: true,
+        file_paths: filePaths.length > 0 ? filePaths : undefined  // 传递上传的文件路径
       },
       abortController.signal
     )) {
       if (abortController?.signal.aborted) break
 
-      // 打字机效果：逐字符添加
-      for (const char of chunk) {
-        if (abortController?.signal.aborted) break
-        agentMessage.content += char
-        // 每隔几个字符滚动一次，减少性能开销
-        if (agentMessage.content.length % 5 === 0) {
-          scrollToBottom()
+      // 处理不同类型的事件
+      if (event.type === 'skill_start' && event.skill) {
+        // 技能开始执行 - 添加到 skillPlan
+        skillStepId++
+        const newStep = {
+          id: skillStepId,
+          skillId: event.skill.id,
+          nodeId: `skill-${event.skill.id}`,
+          skillName: event.skill.name,
+          skillIcon: event.skill.icon || '🔧',
+          description: event.skill.description || '正在执行...',
+          status: 'running' as const
         }
+        if (!agentMessage.skillPlan) {
+          agentMessage.skillPlan = []
+        }
+        agentMessage.skillPlan.push(newStep)
+        // 触发响应式更新
+        messages.value = [...messages.value]
+        scrollToBottom()
+      } else if (event.type === 'skill_result' && event.result) {
+        // 技能执行完成 - 更新 skillPlan 中的状态
+        if (agentMessage.skillPlan) {
+          const step = agentMessage.skillPlan.find(s => s.skillId === event.result!.id)
+          if (step) {
+            step.status = event.result.success ? 'completed' : 'error'
+            step.output = event.result.output
+            if (event.result.output_file) {
+              const outputFile: OutputFile = {
+                type: event.result.output_file.type as any,
+                name: event.result.output_file.name,
+                url: event.result.output_file.url,
+                size: event.result.output_file.size ? `${Math.round(event.result.output_file.size / 1024)}KB` : undefined
+              }
+              step.outputFile = outputFile
+              // 自动打开预览面板展示结果
+              if (event.result.success) {
+                openOutputFile(outputFile)
+              }
+            }
+            if (!event.result.success && event.result.error) {
+              step.errorDetails = { error: event.result.error, output: event.result.output }
+            }
+            // 触发响应式更新
+            messages.value = [...messages.value]
+          }
+        }
+        scrollToBottom()
+      } else if (event.type === 'text' && event.content) {
+        // 普通文本内容 - 打字机效果
+        for (const char of event.content) {
+          if (abortController?.signal.aborted) break
+          agentMessage.content += char
+          // 每隔几个字符滚动一次，减少性能开销
+          if (agentMessage.content.length % 5 === 0) {
+            scrollToBottom()
+          }
+        }
+        // 每个 chunk 后小延迟，让动画更自然
+        await new Promise(r => setTimeout(r, 10))
       }
-      // 每个 chunk 后小延迟，让动画更自然
-      await new Promise(r => setTimeout(r, 10))
     }
     scrollToBottom()
 
@@ -4570,95 +4643,14 @@ const sendMessage = async () => {
       return
     }
 
-    // 如果没有内容（可能是 API 错误），使用本地模拟
+    // 如果没有内容（可能是 API 错误），显示错误
     if (!agentMessage.content.trim()) {
       throw new Error('No response from API')
     }
 
-    // 解析 AI 回复中的技能规划
-    const skillPlanMatch = agentMessage.content.match(/<!--SKILL_PLAN:(\[.*?\])-->/)
-    if (skillPlanMatch) {
-      try {
-        const planData = JSON.parse(skillPlanMatch[1])
-        // 移除内容中的 SKILL_PLAN 标记
-        agentMessage.content = agentMessage.content.replace(/<!--SKILL_PLAN:\[.*?\]-->/, '').trim()
-
-        // 转换为 skillPlan 格式
-        console.log('[Skill Plan] Available skills:', props.skills.map(s => ({ id: s.id, name: s.name })))
-        console.log('[Skill Plan] Plan data from AI:', planData)
-        console.log('[Skill Plan] Skills count:', props.skills.length)
-
-        // 只保留已安装的技能，过滤掉不存在的
-        const skillPlan: SkillStep[] = planData
-          .map((item: any, index: number) => {
-            // 检查技能是否存在 - 支持精确匹配和包含匹配
-            const skillNameFromAI = item.skill.toLowerCase().trim()
-            let existingSkill = props.skills.find(
-              s => s.name.toLowerCase() === skillNameFromAI
-            )
-            // 如果精确匹配失败，尝试包含匹配
-            if (!existingSkill) {
-              existingSkill = props.skills.find(
-                s => s.name.toLowerCase().includes(skillNameFromAI) ||
-                     skillNameFromAI.includes(s.name.toLowerCase())
-              )
-            }
-            console.log(`[Skill Plan] Matching "${item.skill}" -> found:`, existingSkill ? existingSkill.name : 'NOT FOUND (will be filtered)')
-
-            // 只返回已安装的技能
-            if (!existingSkill) return null
-
-            return {
-              id: index + 1,
-              skillId: existingSkill.id,
-              nodeId: `node-${index + 1}`,
-              skillName: existingSkill.name,  // 使用实际技能名
-              skillIcon: existingSkill.icon || '⚡',
-              description: item.action,
-              status: 'pending' as const
-            }
-          })
-          .filter((item): item is SkillStep => item !== null)  // 过滤掉不存在的
-          .map((item, index) => ({ ...item, id: index + 1, nodeId: `node-${index + 1}` }))  // 重新编号
-
-        if (skillPlan.length > 0) {
-          // 生成简单的线性边
-          const edges = skillPlan.slice(0, -1).map((_, i) => ({
-            from: `node-${i + 1}`,
-            to: `node-${i + 2}`
-          }))
-
-          // 强制触发 Vue 响应式更新：找到消息索引并替换
-          const msgIndex = messages.value.findIndex(m => m.id === agentMessage.id)
-          if (msgIndex !== -1) {
-            messages.value[msgIndex] = {
-              ...agentMessage,
-              skillPlan,
-              pipelineEdges: edges
-            }
-          }
-          scrollToBottom()
-
-          // 保存 AI 消息到会话（包含技能规划，使用当前时间确保顺序正确）
-          saveMessageToSession('agent', agentMessage.content, {
-            skill_plan: skillPlan,
-            pipeline_edges: edges
-          }, new Date())
-
-          // 自动开始执行技能流程
-          await new Promise(resolve => setTimeout(resolve, 500))
-          executeSkillsParallel(agentMessage.id)
-          return // 执行过程中会设置 isProcessing
-        }
-      } catch (e) {
-        console.error('Failed to parse skill plan:', e)
-      }
-    }
-
-    // 保存 AI 消息到会话（使用当前时间确保顺序正确）
+    // 保存 AI 消息到会话（包含 skillPlan 信息）
     saveMessageToSession('agent', agentMessage.content, {
-      skill_plan: agentMessage.skillPlan,
-      pipeline_edges: agentMessage.pipelineEdges
+      skill_plan: agentMessage.skillPlan
     }, new Date())
 
     isProcessing.value = false
@@ -4674,36 +4666,10 @@ const sendMessage = async () => {
 
     console.error('Chat API error:', error)
 
-    // API 调用失败时，回退到本地技能规划模式
-    const { steps: skillPlan, edges: pipelineEdges } = planSkills(userInput)
-
-    if (skillPlan.length > 0) {
-      // 强制触发 Vue 响应式更新
-      const msgIndex = messages.value.findIndex(m => m.id === agentMessage.id)
-      if (msgIndex !== -1) {
-        messages.value[msgIndex] = {
-          ...agentMessage,
-          content: `好的，我来帮你处理这个任务。我规划了以下 ${skillPlan.length} 个技能的执行流程：`,
-          skillPlan,
-          pipelineEdges
-        }
-      }
-      scrollToBottom()
-
-      // 保存 AI 消息到会话（本地规划，使用当前时间确保顺序正确）
-      saveMessageToSession('agent', messages.value[msgIndex]?.content || agentMessage.content, {
-        skill_plan: skillPlan,
-        pipeline_edges: pipelineEdges
-      }, new Date())
-
-      // 开始执行技能
-      await new Promise(resolve => setTimeout(resolve, 400))
-      executeSkillsParallel(messages.value[msgIndex]?.id || agentMessage.id)
-    } else {
-      agentMessage.content = '抱歉，我暂时无法连接到 AI 服务。请稍后再试。'
-      saveMessageToSession('agent', agentMessage.content, undefined, new Date())
-      isProcessing.value = false
-    }
+    // API 失败时直接显示错误，不再回退到本地技能规划
+    agentMessage.content = '抱歉，我暂时无法连接到 AI 服务。请稍后再试。'
+    saveMessageToSession('agent', agentMessage.content, undefined, new Date())
+    isProcessing.value = false
   } finally {
     abortController = null
   }
@@ -4726,38 +4692,59 @@ const formatJsonWithHighlight = (data: any): string => {
     .replace(/: (true|false|null)/g, ': <span class="json-bool">$1</span>')
 }
 
-// Markdown 渲染函数
+// Markdown 渲染函数 - 支持表格、代码块、标题等
 const renderMarkdown = (text: string): string => {
   if (!text) return ''
 
+  // 先处理表格（在转义之前）
   let html = text
-    // 转义 HTML 特殊字符（防止 XSS）
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
+
+  // 处理 Markdown 表格
+  const tableRegex = /^\|(.+)\|\s*\n\|[-:\s|]+\|\s*\n((?:\|.+\|\s*\n?)+)/gm
+  html = html.replace(tableRegex, (match, headerRow, bodyRows) => {
+    const headers = headerRow.split('|').map((h: string) => h.trim()).filter((h: string) => h)
+    const headerHtml = headers.map((h: string) => `<th>${h}</th>`).join('')
+
+    const rows = bodyRows.trim().split('\n').map((row: string) => {
+      const cells = row.split('|').map((c: string) => c.trim()).filter((c: string) => c)
+      return `<tr>${cells.map((c: string) => `<td>${c}</td>`).join('')}</tr>`
+    }).join('')
+
+    return `<table class="markdown-table"><thead><tr>${headerHtml}</tr></thead><tbody>${rows}</tbody></table>`
+  })
+
+  html = html
+    // 转义 HTML 特殊字符（防止 XSS）- 但跳过已处理的表格
+    .replace(/&(?!amp;|lt;|gt;)/g, '&amp;')
+    .replace(/<(?!\/?(?:table|thead|tbody|tr|th|td|pre|code|strong|em|h[1-6]|li|ul|ol|a|br|span|div)[ >])/g, '&lt;')
+    .replace(/(?<!["=])>/g, '&gt;')
     // 代码块 ```code```
     .replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre class="code-block"><code>$2</code></pre>')
     // 行内代码 `code`
     .replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>')
     // 粗体 **text**
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    // 斜体 *text*
-    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    // 斜体 *text*（但不匹配 **）
+    .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>')
     // 标题 ###
-    .replace(/^### (.+)$/gm, '<h4>$1</h4>')
-    .replace(/^## (.+)$/gm, '<h3>$1</h3>')
-    .replace(/^# (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^#### (.+)$/gm, '<h5 class="md-h5">$1</h5>')
+    .replace(/^### (.+)$/gm, '<h4 class="md-h4">$1</h4>')
+    .replace(/^## (.+)$/gm, '<h3 class="md-h3">$1</h3>')
+    .replace(/^# (.+)$/gm, '<h2 class="md-h2">$1</h2>')
+    // 分隔线 ---
+    .replace(/^---+$/gm, '<hr class="md-hr">')
     // 无序列表 - item
-    .replace(/^- (.+)$/gm, '<li>$1</li>')
+    .replace(/^- (.+)$/gm, '<li class="md-li">$1</li>')
     // 有序列表 1. item
-    .replace(/^\d+\. (.+)$/gm, '<li>$1</li>')
+    .replace(/^\d+\. (.+)$/gm, '<li class="md-li-ordered">$1</li>')
     // 链接 [text](url)
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
-    // 换行
-    .replace(/\n/g, '<br>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" class="md-link">$1</a>')
+    // 换行（但不在表格内）
+    .replace(/\n(?![<])/g, '<br>')
 
-  // 包装连续的 li 标签
-  html = html.replace(/(<li>.*?<\/li>)(<br>)?/g, '$1')
+  // 包装连续的 li 标签为 ul
+  html = html.replace(/((?:<li class="md-li">.*?<\/li>\s*)+)/g, '<ul class="md-ul">$1</ul>')
+  html = html.replace(/((?:<li class="md-li-ordered">.*?<\/li>\s*)+)/g, '<ol class="md-ol">$1</ol>')
 
   return html
 }
@@ -7652,6 +7639,61 @@ const openInNewTab = (url: string) => {
 
 .markdown-content a:hover {
   text-decoration: underline;
+}
+
+/* Markdown 表格样式 */
+.markdown-content .markdown-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 12px;
+  background: #fff;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.markdown-content .markdown-table th {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  padding: 10px 12px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.markdown-content .markdown-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid #e5e7eb;
+  color: #374151;
+}
+
+.markdown-content .markdown-table tr:last-child td {
+  border-bottom: none;
+}
+
+.markdown-content .markdown-table tr:hover td {
+  background: #f8fafc;
+}
+
+/* Markdown 分隔线 */
+.markdown-content .md-hr {
+  border: none;
+  border-top: 1px solid #e5e7eb;
+  margin: 16px 0;
+}
+
+/* Markdown 列表 */
+.markdown-content .md-ul,
+.markdown-content .md-ol {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.markdown-content .md-li,
+.markdown-content .md-li-ordered {
+  margin: 4px 0;
+  line-height: 1.5;
 }
 
 /* 打字光标效果 - 只在正在输入时显示 */

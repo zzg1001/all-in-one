@@ -16,99 +16,58 @@ from schemas.data_note import DataNoteCreate, DataNoteUpdate, DataNoteResponse, 
 
 async def ensure_local_file(file_url: str) -> Optional[Path]:
     """
-    确保文件存在于本地。本地没有则从 MinIO 拉取并缓存。（异步版本）
+    确保文件存在于本地。（异步版本）
 
     Args:
         file_url: 文件 URL，如 /file-manage/xxx/yyy.pdf
 
     Returns:
-        本地文件路径，如果无法获取则返回 None
+        本地文件路径，如果文件不存在则返回 None
     """
-    from services.storage.utils import is_minio_storage, get_storage_backend
-
     # 解析路径
     if file_url.startswith('/file-manage/'):
         relative_path = file_url[len('/file-manage/'):]
         local_dir = get_file_manage_dir()
-        category = "file_manage"
     elif file_url.startswith('/uploads/'):
         relative_path = file_url[len('/uploads/'):]
         local_dir = get_uploads_dir()
-        category = "uploads"
     elif file_url.startswith('/outputs/'):
         relative_path = file_url[len('/outputs/'):]
         local_dir = get_outputs_dir()
-        category = "outputs"
     else:
         return None
 
     local_path = local_dir / relative_path
 
-    # 1. 本地存在，直接返回
+    # 本地存在，直接返回
     if local_path.exists():
         return local_path
-
-    # 2. 本地没有，从 MinIO 拉取
-    if is_minio_storage(category):
-        try:
-            storage = get_storage_backend(category)
-            content = await storage.read_file(relative_path)
-            # 缓存到本地
-            local_path.parent.mkdir(parents=True, exist_ok=True)
-            local_path.write_bytes(content)
-            print(f"[FileManage] 从 MinIO 拉取并缓存: {category}/{relative_path}")
-            return local_path
-        except Exception as e:
-            print(f"[FileManage] MinIO 读取失败 ({category}/{relative_path}): {e}")
 
     return None
 
 
 def ensure_local_file_sync(file_url: str) -> Optional[Path]:
     """
-    确保文件存在于本地。本地没有则从 MinIO 拉取并缓存。（同步版本）
+    确保文件存在于本地。（同步版本）
     """
-    import asyncio
-    from services.storage.utils import is_minio_storage, get_storage_backend
-
     # 解析路径
     if file_url.startswith('/file-manage/'):
         relative_path = file_url[len('/file-manage/'):]
         local_dir = get_file_manage_dir()
-        category = "file_manage"
     elif file_url.startswith('/uploads/'):
         relative_path = file_url[len('/uploads/'):]
         local_dir = get_uploads_dir()
-        category = "uploads"
     elif file_url.startswith('/outputs/'):
         relative_path = file_url[len('/outputs/'):]
         local_dir = get_outputs_dir()
-        category = "outputs"
     else:
         return None
 
     local_path = local_dir / relative_path
 
-    # 1. 本地存在，直接返回
+    # 本地存在，直接返回
     if local_path.exists():
         return local_path
-
-    # 2. 本地没有，从 MinIO 拉取
-    if is_minio_storage(category):
-        try:
-            storage = get_storage_backend(category)
-            loop = asyncio.new_event_loop()
-            try:
-                content = loop.run_until_complete(storage.read_file(relative_path))
-                # 缓存到本地
-                local_path.parent.mkdir(parents=True, exist_ok=True)
-                local_path.write_bytes(content)
-                print(f"[FileManage] 从 MinIO 拉取并缓存: {category}/{relative_path}")
-                return local_path
-            finally:
-                loop.close()
-        except Exception as e:
-            print(f"[FileManage] MinIO 读取失败 ({category}/{relative_path}): {e}")
 
     return None
 
@@ -172,18 +131,15 @@ async def upload_file(
     file: UploadFile = File(...),
     agent_id: Optional[str] = None
 ):
-    """File Manage 上传文件（按 agent_id 隔离存储，双写模式：本地 + MinIO）
+    """File Manage 上传文件（按 agent_id 隔离存储，本地存储模式）
 
     Args:
         file: 上传的文件
         agent_id: Agent ID，文件将存储在 {agent_id}/ 目录下
 
     Note:
-        File Manage 使用独立的 MinIO bucket (ai-file-manage)，与输入框上传分开
+        File Manage 使用本地存储，文件保存在 file_manage 目录下
     """
-    from config import get_settings
-    from services.storage.utils import get_storage_backend, is_minio_storage
-
     # 生成唯一文件名
     ext = Path(file.filename).suffix if file.filename else ""
     unique_name = f"{uuid.uuid4()}{ext}"
@@ -191,39 +147,25 @@ async def upload_file(
     # 按 agent_id 隔离存储路径
     if agent_id:
         relative_path = f"{agent_id}/{unique_name}"
+        agent_dir = FILE_MANAGE_DIR / agent_id
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        local_path = agent_dir / unique_name
     else:
         relative_path = unique_name
+        local_path = FILE_MANAGE_DIR / unique_name
 
     # 读取文件内容
     content = await file.read()
     file_size = len(content)
 
-    # 1. 先写 MinIO（主存储），失败则报错
-    if is_minio_storage("file_manage"):
-        try:
-            storage = get_storage_backend("file_manage")
-            import mimetypes
-            content_type, _ = mimetypes.guess_type(file.filename or "")
-            await storage.write_file(relative_path, content, content_type)
-            print(f"[FileManage] MinIO 写入成功: {relative_path}")
-        except Exception as e:
-            print(f"[FileManage] MinIO 上传失败: {e}")
-            raise HTTPException(status_code=500, detail=f"文件上传失败: {e}")
-
-    # 2. 再写本地（缓存）
-    if agent_id:
-        agent_dir = FILE_MANAGE_DIR / agent_id
-        agent_dir.mkdir(parents=True, exist_ok=True)
-        local_path = agent_dir / unique_name
-    else:
-        local_path = FILE_MANAGE_DIR / unique_name
-
+    # 写入本地存储
     try:
         with open(local_path, "wb") as buffer:
             buffer.write(content)
         print(f"[FileManage] 本地写入成功: {local_path}")
     except Exception as e:
-        print(f"[FileManage] 本地写入失败（不影响上传）: {e}")
+        print(f"[FileManage] 本地写入失败: {e}")
+        raise HTTPException(status_code=500, detail=f"文件上传失败: {e}")
 
     return {
         "url": f"/file-manage/{relative_path}",
@@ -472,8 +414,7 @@ def soft_delete_folder_contents(db: Session, user_id: str, folder_id: str, delet
 
 
 async def delete_physical_file(file_url: str):
-    """删除物理文件（本地 + MinIO 双删）"""
-    from services.storage.utils import get_storage_backend, is_minio_storage
+    """删除物理文件（本地存储）"""
     from config import get_outputs_dir
 
     if not file_url:
@@ -483,34 +424,22 @@ async def delete_physical_file(file_url: str):
     if file_url.startswith('/file-manage/'):
         relative_path = file_url[len('/file-manage/'):]
         local_path = FILE_MANAGE_DIR / relative_path  # 使用独立的 file_manage 目录
-        category = "file_manage"
     elif file_url.startswith('/uploads/'):
         relative_path = file_url[len('/uploads/'):]
         local_path = UPLOADS_DIR / relative_path
-        category = "uploads"
     elif file_url.startswith('/outputs/'):
         relative_path = file_url[len('/outputs/'):]
         local_path = get_outputs_dir() / relative_path
-        category = "outputs"
     else:
         return
 
-    # 1. 删除本地文件
+    # 删除本地文件
     try:
         if local_path.exists():
             local_path.unlink()
             print(f"[Delete] 本地文件已删除: {local_path}")
     except Exception as e:
         print(f"[Delete] 本地文件删除失败: {e}")
-
-    # 2. 删除 MinIO 文件
-    if is_minio_storage(category):
-        try:
-            storage = get_storage_backend(category)
-            await storage.delete_file(relative_path)
-            print(f"[Delete] MinIO 文件已删除: {relative_path}")
-        except Exception as e:
-            print(f"[Delete] MinIO 文件删除失败: {e}")
 
 
 def collect_files_in_folder(db: Session, user_id: str, folder_id: str) -> List[tuple]:

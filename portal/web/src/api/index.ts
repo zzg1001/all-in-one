@@ -320,6 +320,34 @@ export interface ChatRequest {
   context?: ContextItem[]  // 上下文项列表
   agent_id?: string  // Agent ID for RAG data isolation
   enable_rag?: boolean  // Enable RAG retrieval (default: true)
+  file_paths?: string[]  // 上传文件的服务器路径，SDK 会自动处理
+}
+
+// Chat stream event types - SDK returns structured events
+export interface ChatStreamEvent {
+  type: 'text' | 'skill_start' | 'skill_result'
+  // For text events
+  content?: string
+  // For skill_start events
+  skill?: {
+    id: string
+    name: string
+    icon: string
+    description: string
+  }
+  // For skill_result events
+  result?: {
+    id: string
+    success: boolean
+    output?: string
+    error?: string
+    output_file?: {
+      name: string
+      type: string
+      url: string
+      size?: number
+    }
+  }
 }
 
 export interface ChatResponse {
@@ -530,11 +558,14 @@ export const agentApi = {
       body: JSON.stringify(data),
     }),
 
+  // Chat streaming event types
+  // ChatStreamEvent can be: text content, skill start, or skill result
+
   // Chat (streaming via SSE) - with RAG support
   chatStream: async function* (
     data: ChatRequest,
     signal?: AbortSignal
-  ): AsyncGenerator<string> {
+  ): AsyncGenerator<ChatStreamEvent> {
     const url = `${API_BASE_URL}/agent/chat/stream`
     const response = await fetch(url, {
       method: 'POST',
@@ -579,7 +610,29 @@ export const agentApi = {
             try {
               const parsed = JSON.parse(jsonData)
               if (parsed.content) {
-                yield parsed.content
+                // Parse special markers for skill events
+                let content = parsed.content as string
+
+                // Check for skill start markers
+                const skillStartMatch = content.match(/__SKILL_START__(.+?)__SKILL_START__/)
+                if (skillStartMatch) {
+                  const skillInfo = JSON.parse(skillStartMatch[1])
+                  yield { type: 'skill_start', skill: skillInfo }
+                  content = content.replace(/__SKILL_START__.+?__SKILL_START__/g, '')
+                }
+
+                // Check for skill result markers
+                const skillResultMatch = content.match(/__SKILL_RESULT__(.+?)__SKILL_RESULT__/)
+                if (skillResultMatch) {
+                  const resultInfo = JSON.parse(skillResultMatch[1])
+                  yield { type: 'skill_result', result: resultInfo }
+                  content = content.replace(/__SKILL_RESULT__.+?__SKILL_RESULT__/g, '')
+                }
+
+                // Yield remaining text content
+                if (content.trim()) {
+                  yield { type: 'text', content }
+                }
               }
               if (parsed.error) {
                 throw new Error(parsed.error)

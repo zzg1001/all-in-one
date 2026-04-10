@@ -159,14 +159,68 @@ def upload_local_file_to_storage_sync(
     delete_local: bool = False,
     category: StorageCategory = "outputs"
 ) -> Dict[str, Any]:
-    """Synchronous version of upload_local_file_to_storage."""
-    loop = asyncio.new_event_loop()
+    """Synchronous version of upload_local_file_to_storage.
+
+    For local storage, returns file info directly without async.
+    For MinIO storage, creates a new event loop (safe when not in async context).
+    """
+    from config import get_settings
+    settings = get_settings()
+
+    if not local_path.exists():
+        raise FileNotFoundError(f"Local file not found: {local_path}")
+
+    # Get file info
+    file_size = local_path.stat().st_size
+    file_ext = local_path.suffix.lower()
+    content_type, _ = mimetypes.guess_type(str(local_path))
+
+    file_type_map = {
+        '.json': 'json', '.xlsx': 'excel', '.xls': 'excel',
+        '.csv': 'csv', '.pdf': 'pdf', '.html': 'html',
+        '.png': 'image', '.jpg': 'image', '.jpeg': 'image',
+        '.gif': 'image', '.svg': 'image', '.txt': 'text',
+        '.md': 'markdown', '.docx': 'word', '.pptx': 'pptx'
+    }
+    file_type = file_type_map.get(file_ext, 'file')
+
+    storage_type = settings.get_storage_type_for(category)
+
+    # For local storage, no async needed - return directly
+    if storage_type != "minio":
+        return {
+            "path": str(local_path),
+            "type": file_type,
+            "name": local_path.name,
+            "url": f"/{category}/{local_path.name}",
+            "size": file_size,
+            "storage": "local"
+        }
+
+    # For MinIO storage, need async
     try:
-        return loop.run_until_complete(
-            upload_local_file_to_storage(local_path, storage_path, delete_local, category)
-        )
-    finally:
-        loop.close()
+        # Try to get running loop (if we're in async context)
+        loop = asyncio.get_running_loop()
+        # We're in async context, can't use run_until_complete
+        # Just return local info, the async caller should handle MinIO upload
+        print(f"[Storage] 检测到已有事件循环，跳过 MinIO 上传，使用本地路径")
+        return {
+            "path": str(local_path),
+            "type": file_type,
+            "name": local_path.name,
+            "url": f"/{category}/{local_path.name}",
+            "size": file_size,
+            "storage": "local"
+        }
+    except RuntimeError:
+        # No running loop, safe to create one
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(
+                upload_local_file_to_storage(local_path, storage_path, delete_local, category)
+            )
+        finally:
+            loop.close()
 
 
 async def sync_outputs_dir_to_storage(

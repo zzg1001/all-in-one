@@ -315,7 +315,7 @@ class ExecutionService:
         context: Dict[str, Any]
     ) -> Dict[str, Any]:
         """执行单个 Skill - 真正调用技能脚本"""
-        from services.agent_service import AgentService
+        from services.agent_service_sdk import AgentSDKService
 
         skill_name = node.get("name", "unknown")
         description = node.get("description", "")
@@ -334,7 +334,7 @@ class ExecutionService:
         # 如果有技能，真正执行它
         if skill:
             print(f"[Workflow._execute_skill] Found skill: id={skill.id}, folder_path={skill.folder_path}")
-            agent_service = AgentService(self.db)
+            agent_service = AgentSDKService(self.db)
             params = {
                 **step_inputs,
                 "context": context.get("user_query", description),
@@ -377,10 +377,20 @@ class ExecutionService:
 
             print(f"[Workflow._execute_skill] Calling execute_skill with params={params}")
 
-            success, result, error, output = agent_service.execute_skill(
-                skill_id=skill.id,
-                params=params
+            # 调用异步方法
+            import asyncio
+            exec_result = asyncio.get_event_loop().run_until_complete(
+                agent_service.execute_skill(
+                    skill_id=skill.id,
+                    params=params
+                )
             )
+
+            # 解析返回的字典
+            success = exec_result.get("success", False)
+            result = exec_result.get("result")
+            error = exec_result.get("error")
+            output = exec_result.get("output")
 
             print(f"[Workflow._execute_skill] Result: success={success}, result={result}, error={error}")
 

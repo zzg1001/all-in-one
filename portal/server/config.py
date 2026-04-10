@@ -21,10 +21,9 @@ class Settings(BaseSettings):
     db_password: str = ""
     db_name: str = "ai_agent"
 
-    # Claude AI
-    anthropic_api_key: str = ""
-    anthropic_auth_token: str = ""  # Azure 代理用这个
-    anthropic_base_url: str = ""
+    # Claude AI (Azure 代理)
+    anthropic_auth_token: str = ""  # Azure 代理认证 Token
+    anthropic_base_url: str = ""    # Azure 代理 URL
     claude_model: str = "claude-opus-4-5"
 
     # App
@@ -36,9 +35,9 @@ class Settings(BaseSettings):
 
     # 分类存储配置（留空则使用 storage_type 的值）
     skills_storage_type: str = "minio"       # Skills → MinIO（远程共享）
-    file_manage_storage_type: str = "minio"  # File Manage → MinIO（远程共享）
-    uploads_storage_type: str = ""           # 输入框上传 → 默认本地
-    outputs_storage_type: str = ""           # Outputs → 默认本地
+    file_manage_storage_type: str = "local"  # File Manage → 本地存储
+    uploads_storage_type: str = "local"      # 输入框上传 → 本地存储
+    outputs_storage_type: str = "local"      # Outputs → 本地存储
 
     # Local Storage Paths
     local_storage_base_path: str = ""  # 本地存储根目录
@@ -105,6 +104,22 @@ class Settings(BaseSettings):
     @property
     def database_url(self) -> str:
         return f"mysql+pymysql://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
+
+    def get_anthropic_client_kwargs(self) -> dict:
+        """获取 Anthropic client 初始化参数（支持 Azure 代理）"""
+        if self.anthropic_base_url and 'azure' in self.anthropic_base_url.lower():
+            # Azure 代理：用 Bearer token 认证
+            return {
+                "base_url": self.anthropic_base_url,
+                "api_key": "placeholder",  # SDK 需要，但不会被使用
+                "default_headers": {"Authorization": f"Bearer {self.anthropic_auth_token}"}
+            }
+        else:
+            # 直连或其他代理
+            kwargs = {"api_key": self.anthropic_auth_token}
+            if self.anthropic_base_url:
+                kwargs["base_url"] = self.anthropic_base_url
+            return kwargs
 
     def get_storage_type_for(self, category: str) -> str:
         """获取指定类别的存储类型

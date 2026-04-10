@@ -9,15 +9,12 @@ from database import get_db
 from config import get_uploads_dir, get_skills_storage_temp_dir
 from schemas.agent import (
     ChatRequest, ChatResponse,
-    PlanRequest, PlanResponse,
     ExecuteRequest, ExecuteResponse, OutputFile,
-    AnalyzeRequest, AnalyzeResponse, AnalyzeCodeResult,
     SkillChatRequest, SkillChatMessage,
     SkillExecuteInteractiveRequest,
     AgentLoopRequest, ToolCall
 )
-from services.agent_service import AgentService
-from services.agent_service_v2 import AgentServiceV2
+from services.agent_service_sdk import AgentSDKService
 from services.file_generator import generate_output_file
 from routers.logs import (
     log_info, log_error,
@@ -53,7 +50,7 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         user_input=request.message
     )
 
-    service = AgentService(db)
+    service = AgentSDKService(db)
     try:
         history = [{"role": m.role, "content": m.content} for m in request.history] if request.history else []
         log_ai_start(request.message[:100])
@@ -183,7 +180,14 @@ async def chat_stream(
    - 告知用户未找到相关数据
    - 建议用户先在 File Manage 中上传相关文件"""
 
-    service = AgentService(db)
+    service = AgentSDKService(db)
+
+    # 调试日志
+    print(f"\n[/chat/stream] ========== 请求信息 ==========")
+    print(f"[/chat/stream] agent_id: {request.agent_id}")
+    print(f"[/chat/stream] skill_ids: {request.skill_ids}")
+    print(f"[/chat/stream] file_paths: {request.file_paths}")
+    print(f"[/chat/stream] message: {request.message[:100]}...")
 
     async def generate():
         try:
@@ -191,7 +195,9 @@ async def chat_stream(
             async for chunk in service.chat_stream(
                 message=message_with_context,
                 history=history,
-                skill_ids=request.skill_ids
+                skill_ids=request.skill_ids,
+                file_paths=request.file_paths,
+                agent_id=request.agent_id
             ):
                 yield f"data: {json.dumps({'content': chunk})}\n\n"
             log_ai_done()
@@ -211,18 +217,7 @@ async def chat_stream(
     )
 
 
-@router.post("/plan", response_model=PlanResponse)
-async def plan_skills(request: PlanRequest, db: Session = Depends(get_db)):
-    """Plan which skills to use based on user input"""
-    service = AgentService(db)
-    try:
-        plan_items, explanation = await service.plan_skills(
-            user_input=request.user_input,
-            available_skill_ids=request.available_skills
-        )
-        return PlanResponse(plan=plan_items, explanation=explanation)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# /plan 端点已移除 - 不再自动规划技能，一切交给 SDK 处理
 
 
 @router.post("/execute", response_model=ExecuteResponse)
@@ -289,7 +284,7 @@ async def execute_skill(request: ExecuteRequest, db: Session = Depends(get_db)):
     print(f"======================================\n")
 
     # 使用 Claude Agent SDK 执行技能
-    service = AgentServiceV2(db)
+    service = AgentSDKService(db)
     log_skill_step(skill_name, "执行脚本", detail=f"使用 Claude Agent SDK")
 
     # 调用异步执行方法
@@ -387,10 +382,10 @@ async def execute_temp_skill(request: ExecuteRequest, db: Session = Depends(get_
     # 日志：开始（包含输入参数）
     log_skill_start(f"[测试] {temp_skill.name}", request.params)
 
-    service = AgentService(db)
+    service = AgentSDKService(db)
     log_skill_step(temp_skill.name, "执行测试", detail=f"script: {request.script_name}")
 
-    success, result, error, output = service.execute_temp_skill(
+    success, result, error, output = await service.execute_temp_skill(
         temp_folder=temp_folder,
         skill_name=temp_skill.name,
         script_name=request.script_name,
@@ -760,382 +755,8 @@ async def preview_file(file_path: str, max_rows: int = 100):
         }
 
 
-@router.post("/analyze")
-async def analyze_data_stream(request: AnalyzeRequest, db: Session = Depends(get_db)):
-    """
-    迭代数据分析端点（SSE 流式返回）
-
-    AI 可以多轮执行代码，逐步深入分析数据：
-    1. AI 输出代码 → 执行 → 返回结果
-    2. AI 看到结果 → 继续分析或输出最终报告
-    3. 最多 max_iterations 轮迭代
-
-    SSE 事件类型:
-    - code: AI 生成的代码
-    - result: 代码执行结果
-    - thinking: AI 的思考过程
-    - error: 错误信息
-    - done: 分析完成，包含最终报告
-    """
-    import re
-
-    log_session_start(
-        api_name="POST /agent/analyze",
-        api_desc="迭代数据分析，AI多轮执行代码进行深度分析",
-        source="数据分析",
-        user_input=request.context
-    )
-
-    service = AgentService(db)
-
-    async def generate():
-        try:
-            iterations = []
-            all_generated_files = []
-            max_iterations = min(request.max_iterations or 5, 10)
-
-            # 读取文件内容供 AI 参考
-            file_content = service._read_files_for_ai(request.file_paths)
-
-            # 构建初始对话历史
-            conversation = []
-
-            # 系统提示
-            system_prompt = f"""你是一个专业的数据分析师。你需要通过执行 Python 代码来分析用户提供的数据文件。
-
-## 工作模式
-你将进行迭代式分析：
-1. 输出分析代码（使用 <!--ANALYSIS_CODE:--> 标记）
-2. 系统执行代码并返回结果
-3. 你根据结果继续分析或输出最终报告
-
-## 代码输出格式
-当你需要执行代码时，使用以下格式：
-<!--ANALYSIS_CODE:-->
-# 你的 Python 代码
-import pandas as pd
-df = pd.read_excel(FILE_PATHS[0])
-print(df.describe())
-<!--END_CODE-->
-
-## 可用变量和函数
-- FILE_PATHS: 输入文件路径列表
-- OUTPUT_DIR: 输出目录
-- OUTPUT_PREFIX: 输出文件前缀
-- save_figure(name=None): 保存 matplotlib 图表
-- save_data(data, name=None, format='csv'): 保存数据（支持 DataFrame, dict, list）
-- 已导入: pandas as pd, numpy as np, matplotlib.pyplot as plt, seaborn as sns (如果可用)
-
-## 分析策略
-1. 首先了解数据结构（shape, columns, dtypes）
-2. 检查缺失值和异常值
-3. 进行统计分析
-4. 生成可视化图表
-5. 得出洞察和结论
-
-## 最终报告格式
-当分析完成时，输出最终报告（使用 <!--FINAL_REPORT:--> 标记）：
-<!--FINAL_REPORT:-->
-# 数据分析报告
-## 1. 数据概况
-...
-## 2. 关键发现
-...
-## 3. 详细分析
-...
-## 4. 结论与建议
-...
-<!--END_REPORT-->
-
-## 文件数据预览
-{file_content[:50000]}
-"""
-
-            # 用户初始请求
-            user_request = request.context or "请分析这些数据文件，提供全面的数据理解报告"
-            conversation.append({"role": "user", "content": user_request})
-
-            # 迭代分析循环
-            for iteration in range(max_iterations):
-                log_ai_start(f"迭代 {iteration + 1}")
-
-                # 调用 AI
-                response = service.client.messages.create(
-                    model=service.model,
-                    max_tokens=8000,
-                    system=system_prompt,
-                    messages=conversation
-                )
-
-                ai_response = response.content[0].text
-                conversation.append({"role": "assistant", "content": ai_response})
-
-                log_ai_done()
-
-                # 检查是否有最终报告
-                final_report_match = re.search(
-                    r'<!--FINAL_REPORT:-->\s*(.*?)\s*<!--END_REPORT-->',
-                    ai_response,
-                    re.DOTALL
-                )
-
-                if final_report_match:
-                    final_report = final_report_match.group(1).strip()
-                    yield f"event: done\ndata: {json.dumps({'final_report': final_report, 'iterations': len(iterations), 'generated_files': all_generated_files}, ensure_ascii=False)}\n\n"
-                    log_session_end(True, f"分析完成，{len(iterations)} 轮迭代")
-                    return
-
-                # 检查是否有分析代码
-                code_match = re.search(
-                    r'<!--ANALYSIS_CODE:-->\s*(.*?)\s*<!--END_CODE-->',
-                    ai_response,
-                    re.DOTALL
-                )
-
-                if code_match:
-                    code = code_match.group(1).strip()
-
-                    # 发送代码事件
-                    yield f"event: code\ndata: {json.dumps({'code': code, 'iteration': iteration + 1}, ensure_ascii=False)}\n\n"
-
-                    # 执行代码
-                    exec_result = service._execute_analysis_code(code, request.file_paths)
-
-                    # 记录迭代结果
-                    iteration_result = {
-                        'code': code,
-                        'success': exec_result['success'],
-                        'stdout': exec_result['stdout'],
-                        'stderr': exec_result.get('stderr', ''),
-                        'generated_files': exec_result.get('generated_files', [])
-                    }
-                    iterations.append(iteration_result)
-
-                    # 收集生成的文件
-                    if exec_result.get('generated_files'):
-                        all_generated_files.extend(exec_result['generated_files'])
-
-                    # 发送结果事件
-                    yield f"event: result\ndata: {json.dumps({'success': exec_result['success'], 'stdout': exec_result['stdout'][:5000], 'stderr': exec_result.get('stderr', '')[:1000], 'generated_files': exec_result.get('generated_files', []), 'iteration': iteration + 1}, ensure_ascii=False)}\n\n"
-
-                    # 将执行结果添加到对话
-                    if exec_result['success']:
-                        result_message = f"代码执行成功。输出结果：\n{exec_result['stdout'][:10000]}"
-                        if exec_result.get('generated_files'):
-                            result_message += f"\n\n生成的文件：{[f['name'] for f in exec_result['generated_files']]}"
-                    else:
-                        result_message = f"代码执行失败。错误信息：\n{exec_result.get('stderr', exec_result.get('error', '未知错误'))}"
-
-                    conversation.append({"role": "user", "content": result_message})
-
-                else:
-                    # AI 没有输出代码也没有最终报告，发送思考内容
-                    thinking_content = ai_response[:2000]
-                    yield f"event: thinking\ndata: {json.dumps({'content': thinking_content, 'iteration': iteration + 1}, ensure_ascii=False)}\n\n"
-
-                    # 提示 AI 继续
-                    conversation.append({"role": "user", "content": "请继续分析，输出分析代码或最终报告。"})
-
-            # 达到最大迭代次数
-            yield f"event: done\ndata: {json.dumps({'final_report': '分析达到最大迭代次数限制。请查看各轮迭代结果。', 'iterations': len(iterations), 'generated_files': all_generated_files}, ensure_ascii=False)}\n\n"
-            log_session_end(True, f"达到最大迭代次数 {max_iterations}")
-
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            log_error(f"分析失败: {str(e)[:50]}")
-            yield f"event: error\ndata: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
-            log_session_end(False, str(e)[:50])
-
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
-    )
-
-
-@router.post("/analyze/sync", response_model=AnalyzeResponse)
-async def analyze_data_sync(request: AnalyzeRequest, db: Session = Depends(get_db)):
-    """
-    迭代数据分析端点（同步返回）
-
-    与流式版本功能相同，但等待所有迭代完成后一次性返回结果。
-    适用于不需要实时反馈的场景。
-    """
-    import re
-
-    log_session_start(
-        api_name="POST /agent/analyze/sync",
-        api_desc="迭代数据分析（同步），AI多轮执行代码进行深度分析",
-        source="数据分析",
-        user_input=request.context
-    )
-
-    service = AgentService(db)
-
-    try:
-        iterations = []
-        all_generated_files = []
-        max_iterations = min(request.max_iterations or 5, 10)
-
-        # 读取文件内容供 AI 参考
-        file_content = service._read_files_for_ai(request.file_paths)
-
-        # 构建初始对话历史
-        conversation = []
-
-        # 系统提示（与流式版本相同）
-        system_prompt = f"""你是一个专业的数据分析师。你需要通过执行 Python 代码来分析用户提供的数据文件。
-
-## 工作模式
-你将进行迭代式分析：
-1. 输出分析代码（使用 <!--ANALYSIS_CODE:--> 标记）
-2. 系统执行代码并返回结果
-3. 你根据结果继续分析或输出最终报告
-
-## 代码输出格式
-当你需要执行代码时，使用以下格式：
-<!--ANALYSIS_CODE:-->
-# 你的 Python 代码
-import pandas as pd
-df = pd.read_excel(FILE_PATHS[0])
-print(df.describe())
-<!--END_CODE-->
-
-## 可用变量和函数
-- FILE_PATHS: 输入文件路径列表
-- OUTPUT_DIR: 输出目录
-- OUTPUT_PREFIX: 输出文件前缀
-- save_figure(name=None): 保存 matplotlib 图表
-- save_data(data, name=None, format='csv'): 保存数据（支持 DataFrame, dict, list）
-- 已导入: pandas as pd, numpy as np, matplotlib.pyplot as plt, seaborn as sns (如果可用)
-
-## 分析策略
-1. 首先了解数据结构（shape, columns, dtypes）
-2. 检查缺失值和异常值
-3. 进行统计分析
-4. 生成可视化图表
-5. 得出洞察和结论
-
-## 最终报告格式
-当分析完成时，输出最终报告（使用 <!--FINAL_REPORT:--> 标记）：
-<!--FINAL_REPORT:-->
-# 数据分析报告
-## 1. 数据概况
-...
-## 2. 关键发现
-...
-## 3. 详细分析
-...
-## 4. 结论与建议
-...
-<!--END_REPORT-->
-
-## 文件数据预览
-{file_content[:50000]}
-"""
-
-        # 用户初始请求
-        user_request = request.context or "请分析这些数据文件，提供全面的数据理解报告"
-        conversation.append({"role": "user", "content": user_request})
-
-        final_report = None
-
-        # 迭代分析循环
-        for iteration in range(max_iterations):
-            log_ai_start(f"迭代 {iteration + 1}")
-
-            # 调用 AI
-            response = service.client.messages.create(
-                model=service.model,
-                max_tokens=8000,
-                system=system_prompt,
-                messages=conversation
-            )
-
-            ai_response = response.content[0].text
-            conversation.append({"role": "assistant", "content": ai_response})
-
-            log_ai_done()
-
-            # 检查是否有最终报告
-            final_report_match = re.search(
-                r'<!--FINAL_REPORT:-->\s*(.*?)\s*<!--END_REPORT-->',
-                ai_response,
-                re.DOTALL
-            )
-
-            if final_report_match:
-                final_report = final_report_match.group(1).strip()
-                break
-
-            # 检查是否有分析代码
-            code_match = re.search(
-                r'<!--ANALYSIS_CODE:-->\s*(.*?)\s*<!--END_CODE-->',
-                ai_response,
-                re.DOTALL
-            )
-
-            if code_match:
-                code = code_match.group(1).strip()
-
-                # 执行代码
-                exec_result = service._execute_analysis_code(code, request.file_paths)
-
-                # 记录迭代结果
-                iteration_result = AnalyzeCodeResult(
-                    code=code,
-                    success=exec_result['success'],
-                    stdout=exec_result['stdout'],
-                    stderr=exec_result.get('stderr', ''),
-                    generated_files=exec_result.get('generated_files', [])
-                )
-                iterations.append(iteration_result)
-
-                # 收集生成的文件
-                if exec_result.get('generated_files'):
-                    all_generated_files.extend(exec_result['generated_files'])
-
-                # 将执行结果添加到对话
-                if exec_result['success']:
-                    result_message = f"代码执行成功。输出结果：\n{exec_result['stdout'][:10000]}"
-                    if exec_result.get('generated_files'):
-                        result_message += f"\n\n生成的文件：{[f['name'] for f in exec_result['generated_files']]}"
-                else:
-                    result_message = f"代码执行失败。错误信息：\n{exec_result.get('stderr', exec_result.get('error', '未知错误'))}"
-
-                conversation.append({"role": "user", "content": result_message})
-
-            else:
-                # AI 没有输出代码也没有最终报告，提示继续
-                conversation.append({"role": "user", "content": "请继续分析，输出分析代码或最终报告。"})
-
-        # 如果没有最终报告，生成一个总结
-        if not final_report:
-            final_report = "分析达到最大迭代次数限制。请查看各轮迭代结果获取分析详情。"
-
-        log_session_end(True, f"分析完成，{len(iterations)} 轮迭代")
-
-        return AnalyzeResponse(
-            success=True,
-            iterations=iterations,
-            final_report=final_report,
-            generated_files=all_generated_files
-        )
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        log_error(f"分析失败: {str(e)[:50]}")
-        log_session_end(False, str(e)[:50])
-        return AnalyzeResponse(
-            success=False,
-            error=str(e)
-        )
+# /analyze 和 /analyze/sync 端点已移除
+# 数据分析现在直接通过 /chat/stream 完成，AI 会使用 SDK 工具自主分析
 
 
 # ========== Claude Code 风格：步骤化技能执行 ==========
@@ -1182,7 +803,7 @@ async def skill_chat_stream(request: SkillChatRequest, db: Session = Depends(get
         user_input=request.context[:100] if request.context else None
     )
 
-    service = AgentService(db)
+    service = AgentSDKService(db)
 
     async def generate():
         try:
@@ -1261,7 +882,7 @@ async def skill_execute_interactive(request: SkillExecuteInteractiveRequest, db:
         user_input=request.context[:100] if request.context else None
     )
 
-    service = AgentService(db)
+    service = AgentSDKService(db)
 
     async def generate():
         try:
@@ -1330,7 +951,7 @@ async def agent_loop(request: AgentLoopRequest, db: Session = Depends(get_db)):
         user_input=request.context[:100] if request.context else None
     )
 
-    service = AgentService(db)
+    service = AgentSDKService(db)
 
     async def generate():
         try:

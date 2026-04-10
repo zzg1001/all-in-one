@@ -41,10 +41,8 @@ class VectorService:
 
     def __init__(self):
         self.settings = get_settings()
-        self.client = anthropic.Anthropic(
-            api_key=self.settings.anthropic_api_key,
-            base_url=self.settings.anthropic_base_url or None
-        )
+        client_kwargs = self.settings.get_anthropic_client_kwargs()
+        self.client = anthropic.Anthropic(**client_kwargs)
         self._db_initialized = False
 
     def _ensure_db(self):

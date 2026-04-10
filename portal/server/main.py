@@ -10,14 +10,14 @@ from routers.favorites import router as favorites_router
 from routers.logs import router as logs_router, setup_log_handler, sys_ready
 from routers.agents import router as agents_router
 from routers.agent_modules import router as agent_modules_router
-from routers.agent_v2 import router as agent_v2_router  # SDK 版本
 from routers.storage import router as storage_router  # 存储访问
 from routers.cleanup import router as cleanup_router  # 清理任务
-from config import get_outputs_dir, get_uploads_dir
+from config import get_outputs_dir, get_uploads_dir, get_file_manage_dir
 
 # 使用配置的路径（目录会自动创建）
 OUTPUTS_DIR = get_outputs_dir()
 UPLOADS_DIR = get_uploads_dir()
+FILE_MANAGE_DIR = get_file_manage_dir()
 
 
 @asynccontextmanager
@@ -68,7 +68,6 @@ app.include_router(logs_router)
 app.include_router(chat_router)
 app.include_router(agents_router)
 app.include_router(agent_modules_router)
-app.include_router(agent_v2_router)  # SDK 版本 API
 app.include_router(storage_router)  # 存储 API (支持 MinIO)
 app.include_router(cleanup_router)  # 清理任务 API
 
@@ -76,6 +75,8 @@ app.include_router(cleanup_router)  # 清理任务 API
 app.mount("/outputs", StaticFiles(directory=str(OUTPUTS_DIR)), name="outputs")
 # 静态文件服务 - 上传文件访问
 app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
+# 静态文件服务 - File Manage 文件访问
+app.mount("/file-manage", StaticFiles(directory=str(FILE_MANAGE_DIR)), name="file-manage")
 
 
 @app.get("/")

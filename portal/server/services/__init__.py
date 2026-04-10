@@ -1,4 +1,4 @@
 from services.workflow_service import WorkflowService
-from services.agent_service import AgentService
+from services.agent_service_sdk import AgentSDKService
 
-__all__ = ["WorkflowService", "AgentService"]
+__all__ = ["WorkflowService", "AgentSDKService"]
