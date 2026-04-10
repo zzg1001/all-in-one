@@ -137,12 +137,31 @@ const isGenerating = ref(false)
 const generatingField = ref('')
 const activeTab = ref<'basic' | 'prompt' | 'tools' | 'advanced'>('basic')
 
-const toggleSkill = (skillId: string) => {
+const toggleSkill = async (skillId: string) => {
   const index = agent.skills.indexOf(skillId)
-  if (index > -1) {
-    agent.skills.splice(index, 1)
-  } else {
+  const isAdding = index === -1
+
+  if (isAdding) {
     agent.skills.push(skillId)
+  } else {
+    agent.skills.splice(index, 1)
+  }
+
+  // 自动保存技能配置
+  if (agent.id) {
+    try {
+      await agentsApi.update(agent.id, { skills: agent.skills })
+      const skillName = availableSkillsFromApi.value.find(s => s.id === skillId)?.name || '技能'
+      showToastMessage(isAdding ? `已添加「${skillName}」` : `已移除「${skillName}」`)
+    } catch (error: any) {
+      // 回滚
+      if (isAdding) {
+        agent.skills.splice(agent.skills.indexOf(skillId), 1)
+      } else {
+        agent.skills.push(skillId)
+      }
+      showToastMessage('保存失败: ' + (error.message || '未知错误'))
+    }
   }
 }
 
@@ -310,12 +329,6 @@ onMounted(() => {
               <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd"/>
             </svg>
             测试
-          </button>
-          <button class="btn-save" @click="saveAgent">
-            <svg viewBox="0 0 20 20" fill="currentColor">
-              <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
-            </svg>
-            保存
           </button>
         </div>
       </div>
@@ -1413,16 +1426,16 @@ onMounted(() => {
   transform: translateY(-2px);
 }
 
-/* 选中状态 - 用伪元素覆盖蓝色蒙层 */
+/* 选中状态 - 绿色边框和蒙层 */
 .skill-grid-item.selected {
-  box-shadow: 0 0 0 2px #1677ff;
+  box-shadow: 0 0 0 2px #22c55e;
 }
 
 .skill-grid-item.selected::before {
   content: '';
   position: absolute;
   inset: 0;
-  background: rgba(22, 119, 255, 0.08);
+  background: rgba(34, 197, 94, 0.08);
   border-radius: 10px;
   pointer-events: none;
   z-index: 1;

@@ -623,7 +623,11 @@ class AgentSDKService:
                     print(f"[chat_stream] 没有工具可用，Claude 将直接回答")
 
                 print(f"[chat_stream] 调用 Claude API, model={self.model}")
-                response = self.client.messages.create(**api_params)
+                # 使用线程池执行同步 API 调用，避免阻塞事件循环
+                response = await asyncio.to_thread(
+                    self.client.messages.create,
+                    **api_params
+                )
                 print(f"[chat_stream] Claude 响应 stop_reason: {response.stop_reason}")
 
                 # 处理响应
@@ -896,7 +900,9 @@ class AgentSDKService:
 """
 
         try:
-            response = self.client.messages.create(
+            # 使用线程池执行同步 API 调用，避免阻塞事件循环
+            response = await asyncio.to_thread(
+                self.client.messages.create,
                 model=self.model,
                 max_tokens=self.max_tokens,
                 system=system_prompt,
