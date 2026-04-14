@@ -748,6 +748,68 @@ async def delete_skill(skill_id: str, db: Session = Depends(get_db)):
     return None
 
 
+@router.post("/{skill_id}/sync")
+async def sync_skill_from_remote(skill_id: str, db: Session = Depends(get_db)):
+    """
+    从 MinIO 同步技能文件到本地（强制覆盖）
+
+    用于更新技能代码后，手动触发远程同步
+    """
+    from services.storage_sync_service import sync_skill_from_minio
+
+    skill = db.query(Skill).filter(
+        Skill.id == skill_id,
+        Skill.deleted_at.is_(None)
+    ).first()
+    if not skill:
+        raise HTTPException(status_code=404, detail="技能不存在")
+
+    if not skill.folder_path:
+        raise HTTPException(status_code=400, detail="技能没有配置文件夹")
+
+    result = await sync_skill_from_minio(skill.folder_path, force=True)
+
+    if result["success"]:
+        return {
+            "success": True,
+            "message": result["message"],
+            "skill_id": skill_id,
+            "skill_name": skill.name,
+            "synced_files": result["synced_files"]
+        }
+    else:
+        raise HTTPException(status_code=500, detail=result["message"])
+
+
+@router.post("/sync-all")
+async def sync_all_skills_from_remote(db: Session = Depends(get_db)):
+    """
+    从 MinIO 同步所有技能文件到本地（强制覆盖）
+
+    用于批量更新技能代码后，手动触发远程同步
+    """
+    from services.storage_sync_service import sync_skills_from_minio
+
+    # 获取所有活跃的技能
+    skills = db.query(Skill).filter(
+        Skill.deleted_at.is_(None),
+        Skill.folder_path.isnot(None)
+    ).all()
+
+    if not skills:
+        return {"success": True, "message": "没有需要同步的技能", "total_synced": 0}
+
+    skill_folders = [s.folder_path for s in skills]
+    result = await sync_skills_from_minio(skill_folders, force=True)
+
+    return {
+        "success": True,
+        "message": f"同步完成，共同步 {result['total_synced']} 个文件",
+        "total_synced": result["total_synced"],
+        "skills_count": len(skills)
+    }
+
+
 @router.get("/{skill_id}/files")
 async def get_skill_files(skill_id: str, db: Session = Depends(get_db)):
     """获取技能文件夹中的文件列表"""

@@ -5,11 +5,12 @@ Storage Sync Service - 启动时从 MinIO 同步文件到本地缓存
 - 启动时预热本地缓存（从 MinIO 拉取 Skills 和 File Manage 文件）
 - 只同步数据库中未删除的记录（检查 deleted_at 标签）
 - 保证第一次访问也能直接读本地
+- 支持强制同步（覆盖本地文件）和按文件大小检测更新
 """
 import asyncio
 from pathlib import Path
 from datetime import datetime
-from typing import Set, Optional
+from typing import Set, Optional, List
 
 from config import get_settings, get_skills_storage_dir, get_file_manage_dir
 from services.storage.utils import get_storage_backend, is_minio_storage
@@ -48,14 +49,22 @@ def get_active_file_manage_folders() -> Set[str]:
         db.close()
 
 
-async def sync_minio_to_local(category: str, local_dir: Path, active_folders: Optional[Set[str]] = None) -> int:
+async def sync_minio_to_local(
+    category: str,
+    local_dir: Path,
+    active_folders: Optional[Set[str]] = None,
+    force: bool = False,
+    check_size: bool = True
+) -> int:
     """
-    从 MinIO 增量同步文件到本地目录（只同步本地不存在的文件）
+    从 MinIO 同步文件到本地目录
 
     Args:
         category: 存储类别 ("skills", "file_manage")
         local_dir: 本地目录
         active_folders: 数据库中未删除的文件夹列表，None 表示同步所有
+        force: 强制覆盖所有文件
+        check_size: 检查文件大小，大小不同则更新
 
     Returns:
         同步的文件数量
@@ -89,8 +98,20 @@ async def sync_minio_to_local(category: str, local_dir: Path, active_folders: Op
 
             local_path = local_dir / remote_path
 
-            # 只下载本地不存在的文件（增量同步）
-            if local_path.exists():
+            # 判断是否需要下载
+            need_download = False
+            if not local_path.exists():
+                need_download = True
+            elif force:
+                need_download = True
+            elif check_size and hasattr(file_info, 'size') and file_info.size:
+                # 比较文件大小
+                local_size = local_path.stat().st_size
+                if local_size != file_info.size:
+                    need_download = True
+                    print(f"[Sync] 文件大小变化 {remote_path}: 本地 {local_size} vs 远程 {file_info.size}")
+
+            if not need_download:
                 continue
 
             # 从 MinIO 下载
@@ -99,10 +120,13 @@ async def sync_minio_to_local(category: str, local_dir: Path, active_folders: Op
                 local_path.parent.mkdir(parents=True, exist_ok=True)
                 local_path.write_bytes(content)
                 synced_count += 1
+                if force or (check_size and local_path.exists()):
+                    print(f"[Sync] 更新文件: {remote_path}")
             except Exception as e:
                 print(f"[Sync] 下载失败 {remote_path}: {e}")
 
-        print(f"[Sync] {category}: 增量同步完成，新增 {synced_count} 个文件")
+        mode = "强制同步" if force else ("智能同步" if check_size else "增量同步")
+        print(f"[Sync] {category}: {mode}完成，同步 {synced_count} 个文件")
         return synced_count
 
     except Exception as e:
@@ -180,3 +204,84 @@ def stop_periodic_sync():
         _sync_task.cancel()
         _sync_task = None
         print("[Sync] 定期同步已停止")
+
+
+async def sync_skill_from_minio(skill_folder: str, force: bool = True) -> dict:
+    """
+    从 MinIO 同步单个 Skill 到本地
+
+    Args:
+        skill_folder: Skill 的文件夹名（通常是 skill_id）
+        force: 强制覆盖本地文件
+
+    Returns:
+        {"success": bool, "synced_files": int, "message": str}
+    """
+    if not is_minio_storage("skills"):
+        return {"success": False, "synced_files": 0, "message": "Skills 未配置 MinIO 存储"}
+
+    storage = get_storage_backend("skills")
+    skills_dir = get_skills_storage_dir()
+    synced_count = 0
+
+    try:
+        # 列出该 skill 文件夹下的所有文件
+        prefix = f"{skill_folder}/"
+        files = await storage.list_files(prefix, recursive=True)
+
+        if not files:
+            return {"success": False, "synced_files": 0, "message": f"MinIO 中未找到 skill: {skill_folder}"}
+
+        for file_info in files:
+            if file_info.is_dir:
+                continue
+
+            remote_path = file_info.path
+            local_path = skills_dir / remote_path
+
+            # 强制模式或文件不存在时下载
+            if force or not local_path.exists():
+                try:
+                    content = await storage.read_file(remote_path)
+                    local_path.parent.mkdir(parents=True, exist_ok=True)
+                    local_path.write_bytes(content)
+                    synced_count += 1
+                    print(f"[Sync Skill] 同步文件: {remote_path}")
+                except Exception as e:
+                    print(f"[Sync Skill] 下载失败 {remote_path}: {e}")
+
+        return {
+            "success": True,
+            "synced_files": synced_count,
+            "message": f"成功同步 {synced_count} 个文件"
+        }
+
+    except Exception as e:
+        return {"success": False, "synced_files": 0, "message": str(e)}
+
+
+async def sync_skills_from_minio(skill_folders: List[str], force: bool = True) -> dict:
+    """
+    从 MinIO 同步多个 Skills 到本地
+
+    Args:
+        skill_folders: Skill 文件夹名列表
+        force: 强制覆盖本地文件
+
+    Returns:
+        {"success": bool, "total_synced": int, "details": dict}
+    """
+    total_synced = 0
+    details = {}
+
+    for folder in skill_folders:
+        result = await sync_skill_from_minio(folder, force)
+        details[folder] = result
+        if result["success"]:
+            total_synced += result["synced_files"]
+
+    return {
+        "success": True,
+        "total_synced": total_synced,
+        "details": details
+    }
