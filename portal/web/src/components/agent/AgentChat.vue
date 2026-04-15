@@ -4443,25 +4443,37 @@ const sendMessage = async () => {
   // 直接把 File Manage 的文件路径放到 inlineRefs 中，和 @ 引用一样
   if (allFilesForAI.length === 0 && props.agentId) {
     try {
-      // 只获取当前 Agent 的 File Manage 文件（按 agentId 隔离）
-      const allNotes = await dataNotesApi.getAll({ parentId: 'all', agentId: props.agentId })
-      console.log(`[sendMessage] Agent ${props.agentId} 的 File Manage 文件:`, allNotes)
+      // 递归获取文件夹中的所有文件
+      const collectFiles = async (parentId: string | 'all'): Promise<void> => {
+        // 根目录用 agentId 过滤，文件夹内容不用 agentId（因为子项可能没有继承 agentId）
+        const notes = parentId === 'all'
+          ? await dataNotesApi.getAll({ parentId, agentId: props.agentId })
+          : await dataNotesApi.getAll({ parentId })
+        console.log(`[sendMessage] 获取 parentId=${parentId} 的文件:`, notes)
 
-      for (const note of allNotes) {
-        // 只要有 file_url 就添加（跳过文件夹）
-        if (note.file_url && note.file_type !== 'folder') {
-          const attachment: MessageAttachment = {
-            id: `fm-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-            name: note.name,
-            type: note.file_type,
-            size: parseInt(note.file_size || '0') || 0,
-            serverPath: note.file_url  // 直接使用 file_url 作为 serverPath
+        for (const note of notes) {
+          console.log(`[sendMessage] File Manage item:`, { name: note.name, file_url: note.file_url, file_type: note.file_type, id: note.id })
+
+          if (note.file_type === 'folder') {
+            // 递归获取文件夹内的文件
+            await collectFiles(note.id)
+          } else if (note.file_url) {
+            // 添加文件
+            const attachment: MessageAttachment = {
+              id: `fm-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+              name: note.name,
+              type: note.file_type,
+              size: parseInt(note.file_size || '0') || 0,
+              serverPath: note.file_url
+            }
+            allFilesForAI.push(attachment)
+            refAttachments.push(attachment)
+            console.log(`[sendMessage] 添加 File Manage 文件: ${note.name} -> ${note.file_url}`)
           }
-          allFilesForAI.push(attachment)
-          refAttachments.push(attachment)
-          console.log(`[sendMessage] 添加 File Manage 文件: ${note.name} -> ${note.file_url}`)
         }
       }
+
+      await collectFiles('all')
       console.log(`[sendMessage] Agent ${props.agentId} File Manage 文件总数: ${allFilesForAI.length}`)
     } catch (e) {
       console.warn('[sendMessage] 获取 File Manage 文件失败:', e)
@@ -4592,9 +4604,11 @@ const sendMessage = async () => {
         scrollToBottom()
       } else if (event.type === 'skill_result' && event.result) {
         // 技能执行完成 - 更新 skillPlan 中的状态
+        console.log('[AgentChat] skill_result received:', JSON.stringify(event.result))
         if (agentMessage.skillPlan) {
           const step = agentMessage.skillPlan.find(s => s.skillId === event.result!.id)
           if (step) {
+            console.log('[AgentChat] skill_result.success =', event.result.success, 'type:', typeof event.result.success)
             step.status = event.result.success ? 'completed' : 'error'
             step.output = event.result.output
             if (event.result.output_file) {

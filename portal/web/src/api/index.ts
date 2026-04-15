@@ -613,20 +613,28 @@ export const agentApi = {
                 // Parse special markers for skill events
                 let content = parsed.content as string
 
-                // Check for skill start markers
-                const skillStartMatch = content.match(/__SKILL_START__(.+?)__SKILL_START__/)
+                // Check for skill start markers (use [\s\S] to match newlines)
+                const skillStartMatch = content.match(/__SKILL_START__([\s\S]+?)__SKILL_START__/)
                 if (skillStartMatch) {
-                  const skillInfo = JSON.parse(skillStartMatch[1])
-                  yield { type: 'skill_start', skill: skillInfo }
-                  content = content.replace(/__SKILL_START__.+?__SKILL_START__/g, '')
+                  try {
+                    const skillInfo = JSON.parse(skillStartMatch[1])
+                    yield { type: 'skill_start', skill: skillInfo }
+                  } catch (parseErr) {
+                    console.error('Failed to parse skill_start:', parseErr, skillStartMatch[1])
+                  }
+                  content = content.replace(/__SKILL_START__[\s\S]+?__SKILL_START__/g, '')
                 }
 
-                // Check for skill result markers
-                const skillResultMatch = content.match(/__SKILL_RESULT__(.+?)__SKILL_RESULT__/)
+                // Check for skill result markers (use [\s\S] to match newlines)
+                const skillResultMatch = content.match(/__SKILL_RESULT__([\s\S]+?)__SKILL_RESULT__/)
                 if (skillResultMatch) {
-                  const resultInfo = JSON.parse(skillResultMatch[1])
-                  yield { type: 'skill_result', result: resultInfo }
-                  content = content.replace(/__SKILL_RESULT__.+?__SKILL_RESULT__/g, '')
+                  try {
+                    const resultInfo = JSON.parse(skillResultMatch[1])
+                    yield { type: 'skill_result', result: resultInfo }
+                  } catch (parseErr) {
+                    console.error('Failed to parse skill_result:', parseErr, skillResultMatch[1])
+                  }
+                  content = content.replace(/__SKILL_RESULT__[\s\S]+?__SKILL_RESULT__/g, '')
                 }
 
                 // Yield remaining text content
@@ -638,7 +646,7 @@ export const agentApi = {
                 throw new Error(parsed.error)
               }
             } catch (e) {
-              // Ignore parse errors for malformed chunks
+              console.error('SSE parse error:', e, 'jsonData:', jsonData)
             }
           }
         }

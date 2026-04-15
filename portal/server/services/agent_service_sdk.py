@@ -585,6 +585,8 @@ class AgentSDKService:
             # Agent 循环 - 处理工具调用
             max_iterations = 5
             iteration = 0
+            # 跟踪已成功执行的技能，防止重复执行
+            executed_skills = set()
 
             while iteration < max_iterations:
                 iteration += 1
@@ -656,15 +658,29 @@ class AgentSDKService:
                     # 获取技能信息
                     skill_id = getattr(self, '_skill_tool_map', {}).get(tool_use.name)
                     skill = self.db.query(Skill).filter(Skill.id == skill_id).first() if skill_id else None
+                    skill_key = skill_id or tool_use.name
                     skill_info = {
-                        "id": skill_id or tool_use.name,
+                        "id": skill_key,
                         "name": skill.name if skill else tool_use.name,
                         "icon": skill.icon if skill else "🔧",
                         "description": skill.description if skill else "执行技能"
                     }
 
-                    # 发送技能开始事件
-                    yield f"__SKILL_START__{json.dumps(skill_info, ensure_ascii=False)}__SKILL_START__"
+                    # 检查技能是否已经执行过（无论成功失败），防止重复执行
+                    if skill_key in executed_skills:
+                        print(f"[chat_stream] 技能 {skill_key} 已执行过，跳过重复执行")
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_use.id,
+                            "content": f"该技能已在本次对话中执行过，无需重复执行。请直接使用之前的执行结果，或者告诉用户执行情况。"
+                        })
+                        continue
+
+                    # 标记技能已执行（在执行前标记，防止并发重复）
+                    executed_skills.add(skill_key)
+
+                    # 发送技能开始事件 (使用 ensure_ascii=True 确保所有字符被正确转义)
+                    yield f"__SKILL_START__{json.dumps(skill_info)}__SKILL_START__"
 
                     # 执行工具
                     result = await self._execute_tool(
@@ -673,15 +689,15 @@ class AgentSDKService:
                         resolved_file_paths
                     )
 
-                    # 发送技能结果事件
+                    # 发送技能结果事件 (使用 ensure_ascii=True 确保所有字符被正确转义)
                     skill_result = {
-                        "id": skill_id or tool_use.name,
+                        "id": skill_key,
                         "success": result.get("success", False),
                         "output": result.get("output", ""),
                         "error": result.get("error"),
                         "output_file": result.get("_output_file")
                     }
-                    yield f"__SKILL_RESULT__{json.dumps(skill_result, ensure_ascii=False)}__SKILL_RESULT__"
+                    yield f"__SKILL_RESULT__{json.dumps(skill_result)}__SKILL_RESULT__"
 
                     # 构建结果消息给 Claude
                     if result.get("success"):

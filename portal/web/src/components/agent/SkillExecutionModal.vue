@@ -104,11 +104,14 @@ const sendMessage = async () => {
       .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }))
 
     let fullContent = ''
-    for await (const chunk of agentApi.chatStream({
+    for await (const event of agentApi.chatStream({
       message: userMessage,
       history: history
     })) {
-      fullContent += chunk
+      // chatStream 返回的是 ChatStreamEvent 对象，需要提取 content
+      if (event.type === 'text' && event.content) {
+        fullContent += event.content
+      }
       const msgIndex = messages.value.findIndex(m => m.id === aiMsgId)
       if (msgIndex !== -1) {
         messages.value[msgIndex] = {
