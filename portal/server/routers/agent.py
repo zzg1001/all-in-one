@@ -302,11 +302,15 @@ async def execute_skill(request: ExecuteRequest, db: Session = Depends(get_db)):
     output_file = None
     if exec_result.get("_output_file"):
         file_info = exec_result["_output_file"]
+        # size 字段需要是字符串类型
+        size_value = file_info.get("size")
+        if size_value is not None and not isinstance(size_value, str):
+            size_value = str(size_value)
         output_file = OutputFile(
             name=file_info.get("name", "output"),
             type=file_info.get("type", "file"),
             url=file_info.get("url", ""),
-            size=file_info.get("size")
+            size=size_value
         )
         log_file_write(file_info.get('name'), file_info.get('size'))
     elif success and skill:

@@ -1,14 +1,10 @@
 """
-Agent Service SDK - 基于 Claude Agent SDK 的 Agent 服务
+Agent Service SDK - 基于 Anthropic SDK 的 Agent 服务
 
 简化版：一切问题都交给 AI 处理，像 Claude CLI 一样
 - 不再遇事不决就上 skill
 - 不再自动生成 skill
 - 直接用 AI 的能力解决问题
-
-支持两种模式：
-1. claude-agent-sdk 模式（推荐）- 使用官方 Agent SDK
-2. anthropic 模式（备选）- 直接使用 Anthropic SDK
 """
 
 import json
@@ -18,16 +14,6 @@ import sys
 import subprocess
 import time
 from functools import partial
-
-# 尝试导入 claude-agent-sdk，如果失败则使用 anthropic
-try:
-    from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions, tool, create_sdk_mcp_server
-    AGENT_SDK_AVAILABLE = True
-    print("[AgentSDKService] 使用 claude-agent-sdk 模式")
-except ImportError:
-    AGENT_SDK_AVAILABLE = False
-    print("[AgentSDKService] claude-agent-sdk 不可用，使用 anthropic 模式")
-
 import anthropic
 
 
@@ -325,27 +311,10 @@ class AgentSDKService:
             print(f"[AgentSDKService] 使用环境变量配置: {settings.claude_model}")
 
     def _init_client(self):
-        """初始化客户端 - 支持 claude-agent-sdk 和 anthropic 两种模式"""
+        """初始化 Anthropic 客户端"""
         # 检测是否使用 Azure 代理
         is_azure = self.base_url and 'azure' in self.base_url.lower()
 
-        # 设置环境变量供 claude-agent-sdk 使用
-        if self.base_url:
-            os.environ['ANTHROPIC_BASE_URL'] = self.base_url
-        if self.api_key:
-            os.environ['ANTHROPIC_API_KEY'] = self.api_key
-
-        # 尝试使用 claude-agent-sdk
-        self.use_agent_sdk = AGENT_SDK_AVAILABLE and settings.use_agent_sdk if hasattr(settings, 'use_agent_sdk') else AGENT_SDK_AVAILABLE
-
-        if self.use_agent_sdk:
-            print(f"[AgentSDKService] 初始化 claude-agent-sdk 客户端")
-            # claude-agent-sdk 通过环境变量自动配置
-            self.sdk_client = None  # 延迟初始化，在 chat_stream 中创建
-        else:
-            print(f"[AgentSDKService] 初始化 anthropic 客户端")
-
-        # 始终初始化 anthropic 客户端作为备选（用于 execute_skill 等）
         if is_azure:
             # Azure 代理模式
             self.client = anthropic.Anthropic(
@@ -410,7 +379,7 @@ class AgentSDKService:
                 Skill.deleted_at.is_(None)
             )
 
-            # 如果提供了 skill_ids，按 ID 过滤；否则返回所有活跃技能
+            # 如果提供了 skill_ids，严格按 ID 过滤（只用选中的技能）
             if skill_ids:
                 # 过滤掉明显不是有效 UUID 的 ID（如 fallback-1）
                 valid_ids = [sid for sid in skill_ids if not sid.startswith('fallback-')]
@@ -419,13 +388,13 @@ class AgentSDKService:
                     skills = query.all()
                     print(f"[_get_skills_as_tools] 按 skill_ids 找到 {len(skills)} 个技能")
                 else:
-                    # 全是无效 ID（如 fallback-1,2,3），返回所有活跃技能
-                    print(f"[_get_skills_as_tools] skill_ids 无效，返回所有活跃技能")
-                    skills = query.all()
+                    # 全是无效 ID（如 fallback-1,2,3），不返回任何工具
+                    print(f"[_get_skills_as_tools] skill_ids 全是无效 ID，不返回任何工具")
+                    skills = []
             else:
-                # 没有指定 skill_ids，返回所有活跃技能
-                skills = query.all()
-                print(f"[_get_skills_as_tools] 未指定 skill_ids，返回所有 {len(skills)} 个活跃技能")
+                # 没有指定 skill_ids，也不返回任何工具（必须由 Agent 配置指定）
+                print(f"[_get_skills_as_tools] 未指定 skill_ids，不返回任何工具")
+                skills = []
 
             if not skills:
                 print(f"[_get_skills_as_tools] 未找到任何技能")
@@ -812,14 +781,13 @@ class AgentSDKService:
                 env = os.environ.copy()
                 env['PYTHONIOENCODING'] = 'utf-8'
 
-                # 将参数通过环境变量和命令行同时传递，兼容两种方式
+                # 将参数通过环境变量传递，避免命令行转义问题
                 params_json = json.dumps(params_with_config, ensure_ascii=False)
                 env['SKILL_PARAMS'] = params_json
 
                 # 使用异步执行，避免阻塞事件循环
-                # 尝试 --from-env，如果技能不支持则用 JSON 参数
                 result = await _run_subprocess_async(
-                    [sys.executable, str(main_script), params_json],
+                    [sys.executable, str(main_script), "--from-env"],
                     capture_output=True,
                     text=True,
                     encoding='utf-8',
