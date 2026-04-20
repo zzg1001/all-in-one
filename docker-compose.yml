@@ -1,58 +1,51 @@
 version: '3.8'
 
 services:
-  # ========== Portal (用户端) ==========
+  # ========== Frontend - Portal (用户端) ==========
   portal-web:
     build:
-      context: ./portal/web
+      context: ./frontend/portal
       dockerfile: Dockerfile
     ports:
       - "5173:80"
     depends_on:
-      - portal-api
+      - backend
     environment:
-      - VITE_API_BASE_URL=${PORTAL_API_URL:-http://localhost:8000/api}
+      - VITE_API_BASE_URL=${API_URL:-http://localhost:8001/api}
     networks:
       - app-network
     profiles:
       - frontend
 
-  portal-api:
+  # ========== Frontend - Admin (管理端) ==========
+  admin-web:
     build:
-      context: ./portal/server
+      context: ./frontend/admin
+      dockerfile: Dockerfile
+    ports:
+      - "5174:80"
+    depends_on:
+      - backend
+    environment:
+      - VITE_API_BASE_URL=${API_URL:-http://localhost:8001/api}
+    networks:
+      - app-network
+    profiles:
+      - frontend
+
+  # ========== Backend (统一后端) ==========
+  backend:
+    build:
+      context: ./backend
       dockerfile: Dockerfile
     network_mode: host
     env_file:
       - ./deploy.env
     volumes:
-      - ./portal/server/skills_storage:/app/skills_storage
-      - ./portal/server/outputs:/app/outputs
-      - ./portal/server/uploads:/app/uploads
-      - ./portal/server/file_manage:/app/file_manage
-
-  # ========== Admin (管理端) ==========
-  admin-web:
-    build:
-      context: ./admin/web
-      dockerfile: Dockerfile
-    ports:
-      - "5174:80"
-    depends_on:
-      - admin-api
-    environment:
-      - VITE_API_BASE_URL=${ADMIN_API_URL:-http://localhost:8001/api}
-    networks:
-      - app-network
-    profiles:
-      - frontend
-
-  admin-api:
-    build:
-      context: ./admin/server
-      dockerfile: Dockerfile
-    network_mode: host
-    env_file:
-      - ./deploy.env
+      - ./backend/skills_storage:/app/skills_storage
+      - ./backend/outputs:/app/outputs
+      - ./backend/uploads:/app/uploads
+      - ./backend/file_manage:/app/file_manage
 
   # ========== 数据库 ==========
   mysql:
@@ -61,10 +54,9 @@ services:
       - "3306:3306"
     environment:
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root123456}
-      MYSQL_DATABASE: ${DB_NAME:-product_background}
+      MYSQL_DATABASE: ${DB_NAME:-ai_agent}
     volumes:
       - mysql-data:/var/lib/mysql
-      - ./portal/server/schema.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - app-network
     profiles:
@@ -77,13 +69,12 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./backend/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./backend/nginx/conf.d:/etc/nginx/conf.d:ro
     depends_on:
       - portal-web
-      - portal-api
       - admin-web
-      - admin-api
+      - backend
     networks:
       - app-network
     profiles:

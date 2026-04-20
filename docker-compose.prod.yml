@@ -1,45 +1,80 @@
 # 生产环境 Docker Compose
-# 只需要一个配置文件: deploy.env
 #
-# 部署步骤:
-#   1. 修改 deploy.env
-#   2. docker-compose -f docker-compose.prod.yml up -d
+# 部署方式:
+#   1. 仅应用: docker-compose -f docker-compose.prod.yml up -d
+#   2. 应用+数据库: docker-compose -f docker-compose.prod.yml --profile db up -d
+#   3. 仅数据库: docker-compose -f docker-compose.prod.yml up -d mysql
 
 version: '3.8'
 
 services:
-  # ========== Portal API ==========
-  portal-api:
-    build:
-      context: ./portal/server
-      dockerfile: Dockerfile
-    container_name: portal-api
+  # ========== MySQL 数据库 ==========
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
     restart: always
     ports:
-      - "8000:8000"
-    env_file:
-      - ./deploy.env
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root123456}
+      MYSQL_DATABASE: ${DB_NAME:-ai_agent}
+      TZ: Asia/Shanghai
     volumes:
-      - /opt/all-in-one/portal/server/skills_storage:/app/skills_storage
-      - /opt/all-in-one/portal/server/outputs:/app/outputs
-      - /opt/all-in-one/portal/server/uploads:/app/uploads
+      - mysql-data:/var/lib/mysql
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
     networks:
       - app-network
+    profiles:
+      - db
 
-  # ========== Admin API ==========
-  admin-api:
+  # ========== Backend (统一后端) ==========
+  backend:
     build:
-      context: ./admin/server
+      context: ./backend
       dockerfile: Dockerfile
-    container_name: admin-api
+    container_name: backend
     restart: always
     ports:
       - "8001:8000"
     env_file:
       - ./deploy.env
+    volumes:
+      - ./backend/skills_storage:/app/skills_storage
+      - ./backend/outputs:/app/outputs
+      - ./backend/uploads:/app/uploads
+      - ./backend/file_manage:/app/file_manage
+    networks:
+      - app-network
+
+  # ========== Frontend - Portal ==========
+  portal-web:
+    build:
+      context: ./frontend/portal
+      dockerfile: Dockerfile
+    container_name: portal-web
+    restart: always
+    ports:
+      - "5173:80"
+    networks:
+      - app-network
+
+  # ========== Frontend - Admin ==========
+  admin-web:
+    build:
+      context: ./frontend/admin
+      dockerfile: Dockerfile
+    container_name: admin-web
+    restart: always
+    ports:
+      - "5174:80"
     networks:
       - app-network
 
 networks:
   app-network:
     driver: bridge
+
+volumes:
+  mysql-data:
