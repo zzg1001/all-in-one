@@ -1,20 +1,20 @@
 // Application configuration
 
 export const config = {
-  // API base URL - change this to your backend server address
-  apiBaseUrl: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api',
+  // API base URL - 统一后端服务
+  apiBaseUrl: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8001/api',
 
   // Server base URL (without /api)
-  serverBaseUrl: import.meta.env.VITE_SERVER_BASE_URL || 'http://localhost:8000',
+  serverBaseUrl: import.meta.env.VITE_SERVER_BASE_URL || 'http://localhost:8001',
 
   // WebSocket URL
-  wsUrl: import.meta.env.VITE_WS_URL || 'ws://localhost:8000',
+  wsUrl: import.meta.env.VITE_WS_URL || 'ws://localhost:8001',
 
-  // Home page URL
-  homeUrl: import.meta.env.VITE_HOME_URL || 'http://localhost:5175',
+  // 首页 URL（现在是同一个应用内的路由）
+  homeUrl: '/',
 
-  // Admin URL
-  adminUrl: import.meta.env.VITE_ADMIN_URL || 'http://localhost:5174',
+  // Portal URL (当前应用)
+  portalUrl: '',
 }
 
 export default config

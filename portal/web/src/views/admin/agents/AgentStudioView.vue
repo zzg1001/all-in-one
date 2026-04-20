@@ -3,7 +3,6 @@ import { ref, reactive, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { agentsApi, skillsApi, type Skill } from '@/api'
 import SkillCard from '@/components/skills/SkillCard.vue'
-import AddSkillModal from '@/components/skills/AddSkillModal.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -31,11 +30,6 @@ const loadError = ref('')
 const availableSkillsFromApi = ref<Skill[]>([])
 const skillsLoading = ref(false)
 
-// 技能管理相关状态
-const showSkillModal = ref(false)
-const skillModalMode = ref<'create' | 'upload'>('create')
-const editingSkill = ref<Skill | null>(null)  // 编辑时传入的技能
-
 // Toast 提示
 const showToast = ref(false)
 const toastMessage = ref('')
@@ -58,69 +52,6 @@ const loadSkills = async () => {
   } finally {
     skillsLoading.value = false
   }
-}
-
-// 打开创建技能弹窗
-const openCreateModal = () => {
-  editingSkill.value = null
-  skillModalMode.value = 'create'
-  showSkillModal.value = true
-}
-
-// 打开上传技能弹窗
-const openUploadModal = () => {
-  editingSkill.value = null
-  skillModalMode.value = 'upload'
-  showSkillModal.value = true
-}
-
-// 打开编辑技能弹窗
-const openEditModal = (skill: Skill) => {
-  editingSkill.value = skill
-  skillModalMode.value = 'create'  // 编辑也用create模式（AI对话模式）
-  showSkillModal.value = true
-}
-
-// 关闭技能弹窗
-const closeSkillModal = () => {
-  showSkillModal.value = false
-  editingSkill.value = null
-}
-
-// 技能创建/编辑成功
-const handleSkillSubmit = (data: any) => {
-  const isEdit = !!editingSkill.value
-  showSkillModal.value = false
-  editingSkill.value = null
-  loadSkills()
-  showToastMessage(isEdit ? '技能修改成功' : '技能创建成功')
-}
-
-// 删除技能
-const deleteSkill = async (index: number) => {
-  const skill = availableSkillsFromApi.value[index]
-  if (!skill) return
-
-  if (!confirm(`确定要删除技能 "${skill.name}" 吗？`)) return
-
-  try {
-    await skillsApi.delete(skill.id)
-    availableSkillsFromApi.value.splice(index, 1)
-    showToastMessage('技能已删除')
-  } catch (error: any) {
-    console.error('Failed to delete skill:', error)
-    showToastMessage('删除失败: ' + (error.message || '未知错误'))
-  }
-}
-
-// 编辑技能（使用AddSkillModal）
-const editSkill = (skill: Skill) => {
-  // 上传的技能不可编辑
-  if (skill.author === 'uploaded') {
-    showToastMessage('上传的技能不可编辑')
-    return
-  }
-  openEditModal(skill)
 }
 
 const icons = ['🤖', '🧠', '💡', '🎯', '🚀', '⚡', '🔧', '📊', '📝', '💻', '🌐', '🔍', '✨', '🎨', '📚']
@@ -240,13 +171,13 @@ const saveAgent = async () => {
       await agentsApi.create(data)
     }
     alert('Agent 保存成功！')
-    router.push('/agents')
+    router.push('/admin/agents')
   } catch (error: any) {
     alert('保存失败: ' + (error.message || '未知错误'))
   }
 }
 
-const goBack = () => router.push('/agents')
+const goBack = () => router.push('/admin/agents')
 const testAgent = () => router.push({ path: '/', query: { tab: 'agent', agentId: agent.id, agent: agent.name } })
 
 // 加载 Agent 数据
@@ -345,7 +276,7 @@ onMounted(() => {
         </div>
         <div class="intro-item">
           <span class="intro-number">3</span>
-          <span>技能管理: 创建、编辑、删除可用技能</span>
+          <span>技能管理: 选择 Agent 可使用的技能</span>
         </div>
         <div class="intro-item">
           <span class="intro-number">4</span>
@@ -380,7 +311,7 @@ onMounted(() => {
             <span class="nav-number">3</span>
             <div class="nav-text">
               <span class="nav-title">技能管理</span>
-              <span class="nav-desc">管理可用技能</span>
+              <span class="nav-desc">选择可用技能</span>
             </div>
             <span v-if="agent.skills.length > 0" class="nav-check">✓</span>
           </button>
@@ -508,21 +439,15 @@ onMounted(() => {
           <div class="panel-header">
             <div class="panel-header-left">
               <h2>技能管理</h2>
-              <p>管理 Agent 可使用的技能，支持创建、编辑和删除</p>
+              <p>选择 Agent 可使用的技能</p>
             </div>
             <div class="panel-header-right">
-              <button class="btn-create-skill" @click="openCreateModal">
+              <router-link to="/app" class="btn-manage-skills">
                 <svg viewBox="0 0 20 20" fill="currentColor">
-                  <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd"/>
+                  <path d="M10.394 2.08a1 1 0 00-.788 0l-7 3a1 1 0 000 1.84L5.25 8.051a.999.999 0 01.356-.257l4-1.714a1 1 0 11.788 1.838L7.667 9.088l1.94.831a1 1 0 00.787 0l7-3a1 1 0 000-1.838l-7-3zM3.31 9.397L5 10.12v4.102a8.969 8.969 0 00-1.05-.174 1 1 0 01-.89-.89 11.115 11.115 0 01.25-3.762zM9.3 16.573A9.026 9.026 0 007 14.935v-3.957l1.818.78a3 3 0 002.364 0l5.508-2.361a11.026 11.026 0 01.25 3.762 1 1 0 01-.89.89 8.968 8.968 0 00-5.35 2.524 1 1 0 01-1.4 0zM6 18a1 1 0 001-1v-2.065a8.935 8.935 0 00-2-.712V17a1 1 0 001 1z"/>
                 </svg>
-                创建技能
-              </button>
-              <button class="btn-upload-skill" @click="openUploadModal">
-                <svg viewBox="0 0 20 20" fill="currentColor">
-                  <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clip-rule="evenodd"/>
-                </svg>
-                上传技能
-              </button>
+                管理技能
+              </router-link>
             </div>
           </div>
 
@@ -535,24 +460,17 @@ onMounted(() => {
             <div v-else-if="availableSkillsFromApi.length === 0" class="empty-skills-large">
               <div class="empty-icon">⚡</div>
               <h3>暂无技能</h3>
-              <p>创建或上传你的第一个技能</p>
-              <div class="empty-actions">
-                <button class="btn-create-skill" @click="openCreateModal">创建技能</button>
-                <button class="btn-upload-skill" @click="openUploadModal">上传技能</button>
-              </div>
+              <p>请先在技能管理页面创建或上传技能</p>
+              <router-link to="/app" class="btn-manage-skills">前往技能管理</router-link>
             </div>
             <div v-else class="skills-grid">
               <div
-              v-for="(skill, index) in availableSkillsFromApi"
-              :key="skill.id"
-              :class="['skill-grid-item', { selected: agent.skills.includes(skill.id) }]"
-              @click="toggleSkill(skill.id)"
-            >
-                <SkillCard
-                  :skill="skill"
-                  @delete="deleteSkill(index)"
-                  @edit="editSkill(skill)"
-                />
+                v-for="skill in availableSkillsFromApi"
+                :key="skill.id"
+                :class="['skill-grid-item', { selected: agent.skills.includes(skill.id) }]"
+                @click="toggleSkill(skill.id)"
+              >
+                <SkillCard :skill="skill" :hide-actions="true" />
               </div>
             </div>
           </div>
@@ -661,15 +579,6 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- 技能创建/编辑/上传弹窗 -->
-    <AddSkillModal
-      :show="showSkillModal"
-      :mode="skillModalMode"
-      :edit-skill="editingSkill"
-      @close="closeSkillModal"
-      @submit="handleSkillSubmit"
-    />
-
     <!-- Toast 提示 -->
     <Transition name="toast">
       <div v-if="showToast" class="toast-message">
@@ -683,11 +592,7 @@ onMounted(() => {
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
 
 .agent-studio {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  height: 100%;
   background: #f5f7fa;
   color: #1f2937;
   overflow: hidden;
@@ -1308,7 +1213,7 @@ onMounted(() => {
   gap: 8px;
 }
 
-.btn-create-skill, .btn-upload-skill {
+.btn-manage-skills {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1318,30 +1223,18 @@ onMounted(() => {
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s;
-}
-
-.btn-create-skill {
-  background: linear-gradient(135deg, #1677ff 0%, #4096ff 100%);
-  border: none;
-  color: white;
-}
-
-.btn-create-skill:hover {
-  box-shadow: 0 2px 8px rgba(22, 119, 255, 0.3);
-}
-
-.btn-upload-skill {
   background: #fff;
   border: 1px solid #e5e7eb;
   color: #6b7280;
+  text-decoration: none;
 }
 
-.btn-upload-skill:hover {
+.btn-manage-skills:hover {
   background: #f3f4f6;
   color: #1f2937;
 }
 
-.btn-create-skill svg, .btn-upload-skill svg {
+.btn-manage-skills svg {
   width: 14px;
   height: 14px;
 }

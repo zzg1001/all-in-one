@@ -95,9 +95,9 @@ const stats = computed(() => ({
   totalUsage: agents.value.reduce((sum, a) => sum + (a.usage_count || 0), 0)
 }))
 
-const createAgent = () => router.push('/agent-studio')
+const createAgent = () => router.push('/admin/agent-studio')
 const useAgent = (agent: Agent) => router.push({ path: '/', query: { tab: 'agent', agentId: agent.id, agent: agent.name, from: 'home' } })
-const editAgent = (agent: Agent) => router.push({ path: '/agent-studio', query: { id: agent.id } })
+const editAgent = (agent: Agent) => router.push({ path: '/admin/agent-studio', query: { id: agent.id } })
 const onCardClick = (agent: Agent) => useAgent(agent)
 
 const getStatusClass = (status: string) => {
@@ -335,11 +335,7 @@ const getStatusText = (status: string) => {
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
 
 .agents-view {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  height: 100%;
   background: #f5f7fa;
   color: #1f2937;
   overflow: hidden;

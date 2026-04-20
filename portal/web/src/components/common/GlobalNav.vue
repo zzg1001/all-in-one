@@ -78,10 +78,9 @@ const navItems: NavItem[] = [
   { path: '/', query: { tab: 'agent' }, icon: '💬', label: '对话', name: 'home' },
   { path: '/', query: { tab: 'skills' }, icon: '⚡', label: 'Skills', name: 'skills' },
   { path: '/', query: { tab: 'workflows' }, icon: '🔗', label: '工作流', name: 'workflows' },
-  { path: '/agents', icon: '🤖', label: 'Agents', name: 'agents' },
   { path: '/architecture', icon: '◈', label: '架构', name: 'architecture' },
-  { path: '/agent-studio', icon: '🛠️', label: '工坊', name: 'agent-studio' },
-  { path: '/monitor', icon: '📡', label: '监控', name: 'monitor' }
+  { path: '/monitor', icon: '📡', label: '监控', name: 'monitor' },
+  { path: '/admin', icon: '⚙️', label: '管理', name: 'admin' }
 ]
 
 const isActive = (item: NavItem) => {

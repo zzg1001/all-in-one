@@ -27,6 +27,7 @@ interface Skill {
 
 const props = defineProps<{
   skill: Skill
+  hideActions?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -135,7 +136,7 @@ onBeforeUnmount(() => {
         {{ isEditable ? 'SELF' : 'UPLOAD' }}
       </span>
       <span class="title">{{ skill.name }}</span>
-      <div class="actions">
+      <div v-if="!hideActions" class="actions">
         <span v-if="isEditable" class="action edit" @click="handleEdit">✎</span>
         <span class="action del" @click="handleDelete">×</span>
       </div>

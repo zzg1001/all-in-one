@@ -1,32 +1,34 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import SkillsView from '../views/SkillsView.vue'
-import config from '../config'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
+    // ============ 登录页 ============
+    {
+      path: '/login',
+      name: 'login',
+      component: () => import('../views/LoginView.vue'),
+      meta: { requiresAuth: false },
+    },
+    // ============ 首页 ============
     {
       path: '/',
       name: 'home',
-      component: SkillsView,
-      beforeEnter: (to, from, next) => {
-        // 如果没有 agent 参数，重定向到首页
-        if (!to.query.agent) {
-          window.location.href = config.homeUrl
-          return
-        }
-        next()
-      },
+      component: () => import('../views/home/HomePage.vue'),
+      meta: { requiresAuth: false },
     },
     {
-      path: '/agents',
-      name: 'agents',
-      component: () => import('../views/AgentsView.vue'),
+      path: '/skills-market',
+      name: 'skills-market',
+      component: () => import('../views/home/SkillsMarketplace.vue'),
+      meta: { requiresAuth: false },
     },
+    // ============ Portal 应用 ============
     {
-      path: '/agent-studio',
-      name: 'agent-studio',
-      component: () => import('../views/AgentStudioView.vue'),
+      path: '/app',
+      name: 'app',
+      component: () => import('../views/SkillsView.vue'),
+      meta: { requiresAuth: true },
     },
     {
       path: '/monitor',
@@ -90,7 +92,127 @@ const router = createRouter({
       name: 'about',
       component: () => import('../views/AboutView.vue'),
     },
+    // ============ Admin 管理 ============
+    {
+      path: '/admin',
+      component: () => import('../layouts/AdminLayout.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true },
+      children: [
+        {
+          path: '',
+          redirect: '/admin/dashboard',
+        },
+        {
+          path: 'dashboard',
+          name: 'admin-dashboard',
+          component: () => import('../views/admin/dashboard/DashboardView.vue'),
+          meta: { title: '驾驶舱' },
+        },
+        {
+          path: 'agents',
+          name: 'admin-agents',
+          component: () => import('../views/admin/agents/AgentsView.vue'),
+          meta: { title: 'Agent 管理' },
+        },
+        {
+          path: 'agent-studio',
+          name: 'admin-agent-studio',
+          component: () => import('../views/admin/agents/AgentStudioView.vue'),
+          meta: { title: 'Agent 工坊' },
+        },
+        {
+          path: 'models',
+          name: 'admin-models',
+          component: () => import('../views/admin/models/ModelsView.vue'),
+          meta: { title: '模型配置' },
+        },
+        {
+          path: 'tokens',
+          name: 'admin-tokens',
+          component: () => import('../views/admin/tokens/TokensView.vue'),
+          meta: { title: 'Token 管理' },
+        },
+        {
+          path: 'users',
+          name: 'admin-users',
+          component: () => import('../views/admin/users/UsersView.vue'),
+          meta: { title: '用户权限' },
+        },
+        {
+          path: 'permissions',
+          name: 'admin-permissions',
+          component: () => import('../views/admin/permissions/PermissionsView.vue'),
+          meta: { title: '用户权限' },
+        },
+        {
+          path: 'logs',
+          name: 'admin-logs',
+          component: () => import('../views/admin/logs/LogsView.vue'),
+          meta: { title: '日志查看' },
+        },
+        {
+          path: 'apis',
+          name: 'admin-apis',
+          component: () => import('../views/admin/apis/ApisView.vue'),
+          meta: { title: 'API 管理' },
+        },
+      ],
+    },
   ],
+  scrollBehavior(to, _from, savedPosition) {
+    if (to.hash) {
+      return { el: to.hash, behavior: 'smooth' }
+    }
+    if (savedPosition) {
+      return savedPosition
+    }
+    return { top: 0 }
+  }
+})
+
+// 路由守卫
+router.beforeEach(async (to, _from, next) => {
+  // 获取 token
+  const token = localStorage.getItem('auth_token')
+  const isAuthenticated = !!token
+
+  // 如果是登录页，且已登录，跳转到首页
+  if (to.name === 'login' && isAuthenticated) {
+    next({ name: 'home' })
+    return
+  }
+
+  // 如果需要认证且未登录，跳转到登录页
+  if (to.meta.requiresAuth !== false && !isAuthenticated) {
+    next({
+      name: 'login',
+      query: { redirect: to.fullPath },
+    })
+    return
+  }
+
+  // 如果需要管理员权限
+  if (to.path.startsWith('/admin')) {
+    const userStr = localStorage.getItem('auth_user')
+    if (userStr) {
+      try {
+        const user = JSON.parse(userStr)
+        if (user.role !== 'admin') {
+          // 非管理员，跳转到首页
+          next({ name: 'home' })
+          return
+        }
+      } catch (e) {
+        next({ name: 'login' })
+        return
+      }
+    } else {
+      next({ name: 'login' })
+      return
+    }
+  }
+
+  next()
 })
 
 export default router

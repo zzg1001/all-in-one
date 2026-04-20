@@ -9,6 +9,11 @@ import { agentsApi } from '@/api'
 const route = useRoute()
 const showLogPanel = ref(false)
 
+// 是否是首页或管理页面（不显示 Portal 组件）
+const isHomePage = computed(() => {
+  return route.path === '/' || route.path === '/skills-market' || route.path.startsWith('/admin')
+})
+
 // 从 URL 获取 agent 名称，提取部门名（去掉 " Agent" 后缀）
 const departmentName = computed(() => {
   const agentName = route.query.agent as string
@@ -48,10 +53,10 @@ watch(() => route.query.agent, async (agentName) => {
 </script>
 
 <template>
-  <GlobalNav />
+  <GlobalNav v-if="!isHomePage" />
   <RouterView />
-  <LogPanel v-model:show="showLogPanel" />
-  <DataNotesTab :department-name="departmentName" :agent-id="currentAgentId" />
+  <LogPanel v-if="!isHomePage" v-model:show="showLogPanel" />
+  <DataNotesTab v-if="!isHomePage" :department-name="departmentName" :agent-id="currentAgentId" />
 </template>
 
 <style>
@@ -71,7 +76,6 @@ body {
 }
 
 body {
-  background: #f8fafc;
   color: #0f172a;
   font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
