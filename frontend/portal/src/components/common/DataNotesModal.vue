@@ -14,9 +14,9 @@ const notes = ref<DataNote[]>([])
 
 // 前16个（4列×4行）横着排，剩余的竖着排
 const FIRST_SECTION_COUNT = 16
-const firstNotes = computed(() => notes.value.slice(0, FIRST_SECTION_COUNT))
-const restNotes = computed(() => notes.value.slice(FIRST_SECTION_COUNT))
 const isLoading = ref(false)
+const loadError = ref<string | null>(null)
+const LOAD_TIMEOUT = 8000 // 8秒超时
 const editingId = ref<string | null>(null)
 const editingName = ref('')
 const isDragging = ref(false)
@@ -27,6 +27,7 @@ const fileInputRef = ref<HTMLInputElement | null>(null)
 const currentFolderId = ref<string | null>(null)
 const folderPath = ref<{ id: string | null; name: string }[]>([{ id: null, name: 'root' }])
 const currentLevel = computed(() => folderPath.value.length - 1)
+
 // 是否可以创建文件夹（根目录不能创建，且最多3层）
 const canCreateFolder = computed(() => {
   // 如果在部门根目录，不能创建文件夹
@@ -86,9 +87,38 @@ const toast = (message: string) => {
 
 // 部门根文件夹ID（不能删除、不能修改）
 const departmentFolderId = ref<string | null>(null)
+
+// 根目录时：始终显示部门文件夹（不依赖网络）
+const displayNotes = computed(() => {
+  if (currentFolderId.value === null && props.departmentName) {
+    const folderId = departmentFolderId.value || `temp_${props.departmentName}`
+    return [{
+      id: folderId,
+      name: props.departmentName,
+      file_type: 'folder',
+      file_url: null,
+      file_size: null,
+      description: null,
+      is_favorited: false,
+      parent_id: null,
+      item_count: 0,
+      agent_id: props.agentId || null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    } as DataNote]
+  }
+  return notes.value
+})
+
+const firstNotes = computed(() => displayNotes.value.slice(0, FIRST_SECTION_COUNT))
+const restNotes = computed(() => displayNotes.value.slice(FIRST_SECTION_COUNT))
+
 // 防止重复初始化的锁
 let isInitializing = false
 let lastInitDepartment = ''
+
+// 本地存储部门文件夹ID的key
+const getDeptFolderCacheKey = () => `file_manage_dept_folder_${props.departmentName}`
 
 // 初始化部门文件夹（如果有部门名称，自动创建文件夹，但不自动进入）
 const initDepartmentFolder = async () => {
@@ -101,6 +131,15 @@ const initDepartmentFolder = async () => {
     return
   }
 
+  // 1. 先从本地缓存获取文件夹ID（立即显示文件夹）
+  const cachedFolderId = localStorage.getItem(getDeptFolderCacheKey())
+  if (cachedFolderId) {
+    departmentFolderId.value = cachedFolderId
+    currentFolderId.value = null
+    folderPath.value = [{ id: null, name: 'root' }]
+    console.log('[initDepartmentFolder] 从缓存获取文件夹ID:', cachedFolderId)
+  }
+
   // 防止重复初始化同一个部门
   if (isInitializing && lastInitDepartment === props.departmentName) {
     console.log('[initDepartmentFolder] 跳过，正在初始化中')
@@ -111,36 +150,50 @@ const initDepartmentFolder = async () => {
   lastInitDepartment = props.departmentName
 
   try {
-    // 查找是否已有该部门的文件夹（根目录不按 agentId 过滤，兼容旧数据）
-    const allNotes = await dataNotesApi.getAll({ parentId: null })
-    console.log('[initDepartmentFolder] 根目录文件夹:', allNotes.filter(n => n.file_type === 'folder').map(n => ({ id: n.id, name: n.name })))
+    // 2. 后台尝试从服务器获取/创建文件夹（更新缓存）
+    const allNotes = await withTimeout(
+      dataNotesApi.getAll({ parentId: null }),
+      LOAD_TIMEOUT
+    )
 
     const existingFolder = allNotes.find(
       n => n.file_type === 'folder' && n.name === props.departmentName
     )
-    console.log('[initDepartmentFolder] 找到现有文件夹:', existingFolder?.id, existingFolder?.name)
 
     if (existingFolder) {
       departmentFolderId.value = existingFolder.id
-      console.log('[initDepartmentFolder] 使用现有文件夹')
+      localStorage.setItem(getDeptFolderCacheKey(), existingFolder.id)
+      console.log('[initDepartmentFolder] 使用现有文件夹:', existingFolder.id)
     } else {
-      console.log('[initDepartmentFolder] 未找到，准备创建...')
-      // 创建部门文件夹（关联到当前 Agent）
-      const newFolder = await dataNotesApi.createFolder({
-        name: props.departmentName,
-        parent_id: undefined,
-        item_ids: [],
-        agent_id: props.agentId
-      })
-      console.log('[initDepartmentFolder] 创建/返回文件夹:', newFolder.id, newFolder.name)
+      // 创建部门文件夹
+      const newFolder = await withTimeout(
+        dataNotesApi.createFolder({
+          name: props.departmentName,
+          parent_id: undefined,
+          item_ids: [],
+          agent_id: props.agentId
+        }),
+        LOAD_TIMEOUT
+      )
       departmentFolderId.value = newFolder.id
+      localStorage.setItem(getDeptFolderCacheKey(), newFolder.id)
+      console.log('[initDepartmentFolder] 创建新文件夹:', newFolder.id)
     }
 
-    // 停留在根目录，显示部门文件夹
     currentFolderId.value = null
     folderPath.value = [{ id: null, name: 'root' }]
-  } catch (e) {
+    loadError.value = null
+  } catch (e: any) {
     console.error('Failed to init department folder:', e)
+    // 如果有缓存的文件夹ID，即使网络失败也不显示错误（文件夹已经显示了）
+    // 不要重置 currentFolderId 和 folderPath，保持用户当前的位置
+    if (!departmentFolderId.value && currentFolderId.value === null) {
+      if (e.message === 'TIMEOUT') {
+        loadError.value = '网络连接超时'
+      } else {
+        loadError.value = '网络连接失败'
+      }
+    }
   } finally {
     isInitializing = false
   }
@@ -166,18 +219,81 @@ const canUpload = computed(() => {
   return !isAtDepartmentRoot.value
 })
 
-// 加载便签（按 agentId 隔离，但根目录的部门文件夹不过滤）
+// 带超时的请求包装
+const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> => {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error('TIMEOUT'))
+    }, ms)
+    promise
+      .then(result => {
+        clearTimeout(timer)
+        resolve(result)
+      })
+      .catch(err => {
+        clearTimeout(timer)
+        reject(err)
+      })
+  })
+}
+
+// 加载便签
 const loadNotes = async () => {
+  loadError.value = null
+
+  // 在根目录时，如果有部门名称，直接显示部门文件夹（不需要网络请求）
+  if (currentFolderId.value === null && props.departmentName) {
+    // 文件夹始终显示，使用缓存的ID或临时ID
+    const folderId = departmentFolderId.value || `temp_${props.departmentName}`
+    notes.value = [{
+      id: folderId,
+      name: props.departmentName,
+      file_type: 'folder',
+      file_url: null,
+      file_size: null,
+      description: null,
+      is_favorited: false,
+      parent_id: null,
+      item_count: 0,
+      agent_id: props.agentId || null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    } as DataNote]
+    isLoading.value = false
+    nextTick(() => updateScrollState())
+    return
+  }
+
+  // 进入文件夹后，从服务器加载文件列表（显示加载动画）
   isLoading.value = true
+
+  // 如果使用的是临时ID，先尝试获取真实ID
+  let parentId = currentFolderId.value
+  if (parentId?.startsWith('temp_')) {
+    try {
+      await initDepartmentFolder()
+      if (departmentFolderId.value) {
+        parentId = departmentFolderId.value
+        currentFolderId.value = departmentFolderId.value
+        // 更新路径中的ID
+        const lastPath = folderPath.value[folderPath.value.length - 1]
+        if (lastPath) lastPath.id = departmentFolderId.value
+      }
+    } catch (e) {
+      // 获取真实ID失败，继续用临时ID尝试（会失败但显示错误）
+    }
+  }
+
   try {
-    // 在根目录查询部门文件夹时，不按 agentId 过滤（兼容旧数据）
-    // 只有进入文件夹内部后才按 agentId 过滤
     const shouldFilterByAgent = currentFolderId.value !== null
 
-    let allNotes = await dataNotesApi.getAll({
-      parentId: currentFolderId.value,
-      agentId: shouldFilterByAgent ? props.agentId : undefined
-    })
+    let allNotes = await withTimeout(
+      dataNotesApi.getAll({
+        parentId: parentId,
+        agentId: shouldFilterByAgent ? props.agentId : undefined
+      }),
+      LOAD_TIMEOUT
+    )
 
     // 如果在根目录且有部门名称，只显示当前部门的文件夹
     if (currentFolderId.value === null && props.departmentName) {
@@ -187,20 +303,41 @@ const loadNotes = async () => {
     }
 
     notes.value = allNotes
-  } catch (e) {
+    loadError.value = null
+  } catch (e: any) {
     console.error('Failed to load notes:', e)
+    if (e.message === 'TIMEOUT') {
+      loadError.value = '网络超时，文件暂时无法加载'
+    } else if (e.message?.includes('fetch') || e.message?.includes('network') || e.name === 'TypeError') {
+      loadError.value = '网络不可用，文件暂时无法加载'
+    } else {
+      loadError.value = '文件加载失败，请重试'
+    }
+    // 网络失败时清空文件列表（文件夹已在根目录处理）
+    notes.value = []
   } finally {
     isLoading.value = false
     nextTick(() => updateScrollState())
   }
 }
 
-// 进入文件夹
+// 进入文件夹（文件夹始终能打开，文件加载看网络）
 const enterFolder = (folder: DataNote) => {
   if (folder.file_type !== 'folder') return
-  currentFolderId.value = folder.id
-  folderPath.value.push({ id: folder.id, name: folder.name })
+
+  // 使用真实ID或临时ID都能进入
+  const folderId = folder.id.startsWith('temp_')
+    ? (departmentFolderId.value || folder.id)
+    : folder.id
+
+  currentFolderId.value = folderId
+  folderPath.value.push({ id: folderId, name: folder.name })
   selectedIds.value.clear()
+
+  // 清空文件列表，显示占位符
+  notes.value = []
+
+  // 加载文件（会显示加载动画，失败显示错误）
   loadNotes()
 }
 
@@ -377,8 +514,8 @@ const deleteNote = async (id: string, e: Event) => {
 // 单击选中
 const clickCard = (note: DataNote) => {
   if (editingId.value) return
-  // 部门文件夹单击直接进入
-  if (note.id === departmentFolderId.value) {
+  // 部门文件夹单击直接进入（包括临时ID的情况）
+  if (note.id === departmentFolderId.value || note.id.startsWith('temp_')) {
     enterFolder(note)
     return
   }
@@ -496,6 +633,16 @@ const triggerUpload = () => {
   fileInputRef.value?.click()
 }
 
+// 点击上传卡片（处理上传或重试）
+const handleUploadCardClick = () => {
+  if (isLoading.value) return
+  if (loadError.value) {
+    loadNotes()
+  } else {
+    triggerUpload()
+  }
+}
+
 // 处理文件选择
 const handleFileSelect = (e: Event) => {
   const input = e.target as HTMLInputElement
@@ -594,17 +741,21 @@ const formatFileSize = (bytes: number) => {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
 }
 
-onMounted(async () => {
-  await initDepartmentFolder()
-  await loadNotes()
+onMounted(() => {
+  // 1. 立即显示文件夹（不等待网络）
+  loadNotes()
   nextTick(() => updateScrollState())
+
+  // 2. 后台尝试获取/创建真实的文件夹ID
+  initDepartmentFolder()
 })
 
 // 监听部门变化，重新初始化（只在值真正变化时触发）
-watch(() => props.departmentName, async (newVal, oldVal) => {
+watch(() => props.departmentName, (newVal, oldVal) => {
   if (newVal === oldVal) return
-  await initDepartmentFolder()
-  await loadNotes()
+  // 立即显示文件夹，后台获取真实ID
+  loadNotes()
+  initDepartmentFolder()
 })
 </script>
 
@@ -618,7 +769,7 @@ watch(() => props.departmentName, async (newVal, oldVal) => {
     <!-- 头部 -->
     <header class="modal-header">
       <span class="header-title">{{ props.departmentName ? props.departmentName + ' File Manage' : 'File Manage' }}</span>
-      <span class="header-count">{{ notes.length }}</span>
+      <span class="header-count">{{ displayNotes.length }}</span>
       <!-- 面包屑导航 -->
       <div class="breadcrumb">
         <span
@@ -665,11 +816,8 @@ watch(() => props.departmentName, async (newVal, oldVal) => {
           <span>释放文件以上传</span>
         </div>
 
-        <!-- 加载中 -->
-        <div v-if="isLoading" class="loading">加载中...</div>
-
         <!-- 便签网格 -->
-        <div v-else class="grid-wrapper" @click.self="clickEmpty">
+        <div v-if="displayNotes.length > 0 || currentFolderId !== null" class="grid-wrapper" @click.self="clickEmpty">
         <!-- 前16个：横向排列（4列×4行） -->
         <div class="grid grid-horizontal" @click.self="clickEmpty">
           <div
@@ -710,10 +858,14 @@ watch(() => props.departmentName, async (newVal, oldVal) => {
               :class="{ 'no-edit': !canEdit(note.id) }"
             >{{ note.file_type === 'folder' ? note.name : getDisplayName(note.name) }}</div>
           </div>
-          <!-- 上传卡片（前16个未满时显示在这里，根目录不显示） -->
-          <div v-if="firstNotes.length < 16 && canUpload" class="card upload-card" @click="triggerUpload">
-            <span class="upload-icon">+</span>
-            <span class="upload-text">{{ isUploading ? '上传中...' : '上传' }}</span>
+          <!-- 上传卡片/占位符（文件夹内始终显示） -->
+          <div v-if="firstNotes.length < 16 && canUpload" class="card upload-card" :class="{ 'has-error': loadError && !isLoading }" @click.stop="handleUploadCardClick">
+            <span v-if="isLoading" class="loading-ring"></span>
+            <div class="upload-center">
+              <span class="upload-icon">+</span>
+              <span v-if="loadError && !isLoading" class="retry-icon">↻</span>
+            </div>
+            <span class="upload-text" :class="{ 'error-text': loadError && !isLoading }">{{ isLoading ? '加载中' : (isUploading ? '上传中...' : (loadError ? '重试' : '上传')) }}</span>
           </div>
         </div>
 
@@ -757,10 +909,11 @@ watch(() => props.departmentName, async (newVal, oldVal) => {
               :class="{ 'no-edit': !canEdit(note.id) }"
             >{{ note.file_type === 'folder' ? note.name : getDisplayName(note.name) }}</div>
           </div>
-          <!-- 上传卡片（前16个满了显示在这里，根目录不显示） -->
-          <div v-if="firstNotes.length >= 16 && canUpload" class="card upload-card" @click="triggerUpload">
+          <!-- 上传卡片（前16个满了显示在这里） -->
+          <div v-if="firstNotes.length >= 16 && canUpload" class="card upload-card" @click="isLoading ? null : triggerUpload()">
+            <span v-if="isLoading" class="loading-ring"></span>
             <span class="upload-icon">+</span>
-            <span class="upload-text">{{ isUploading ? '上传中...' : '上传' }}</span>
+            <span class="upload-text">{{ isLoading ? '加载中' : (isUploading ? '上传中...' : '上传') }}</span>
           </div>
         </div>
         </div>
@@ -1048,6 +1201,7 @@ watch(() => props.departmentName, async (newVal, oldVal) => {
 
 /* 卡片 - 正方形 */
 .card {
+  position: relative;
   background: #fff;
   border: 1px solid #e8e4d0;
   border-radius: 8px;
@@ -1094,11 +1248,38 @@ watch(() => props.departmentName, async (newVal, oldVal) => {
   background: #f1f8e9;
 }
 
+.upload-center {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+}
+
 .upload-icon {
   font-size: 28px;
   color: #999;
   font-weight: 300;
   line-height: 1;
+}
+
+.has-error .upload-icon {
+  font-size: 16px;
+}
+
+.loading-ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  margin-top: -18px;
+  margin-left: -18px;
+  width: 36px;
+  height: 36px;
+  border: 2px solid #e0e0e0;
+  border-top-color: #ffc107;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
 
 .upload-card:hover .upload-icon {
@@ -1112,6 +1293,22 @@ watch(() => props.departmentName, async (newVal, oldVal) => {
 
 .upload-card:hover .upload-text {
   color: #4caf50;
+}
+
+.retry-icon {
+  position: absolute;
+  font-size: 32px;
+  color: #e53935;
+  line-height: 1;
+}
+
+.upload-text.error-text {
+  color: #e53935;
+}
+
+.upload-card.has-error:hover .retry-icon,
+.upload-card.has-error:hover .upload-text {
+  color: #c62828;
 }
 
 /* 文件图标 - 背景图 */
@@ -1275,15 +1472,8 @@ watch(() => props.departmentName, async (newVal, oldVal) => {
   color: #e74c3c;
 }
 
-/* 状态 */
-.loading {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 40px 20px;
-  color: #888;
-  font-size: 12px;
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 /* Toast 提示 */
@@ -1332,4 +1522,5 @@ watch(() => props.departmentName, async (newVal, oldVal) => {
   background: #fff9c4;
   border-color: #ffc107;
 }
+
 </style>
