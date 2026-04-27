@@ -1,0 +1,14 @@
+@import './base.css';
+
+/* 只在非首页的页面应用这些样式 */
+.app-layout {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2rem;
+  font-weight: normal;
+}
+
+a {
+  text-decoration: none;
+  color: inherit;
+}
