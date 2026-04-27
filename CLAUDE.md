@@ -45,8 +45,7 @@ ai-skills-platform/
 │   ├── uploads/                   # 上传文件
 │   └── requirements.txt
 │
-├── docker-compose.yml             # Docker 编排
-├── docker-compose.dev.yml         # 开发环境 (仅数据库)
+├── docker-compose.yml             # Docker 编排 (开发环境)
 ├── docker-compose.prod.yml        # 生产环境
 ├── deploy.env                     # 环境变量
 └── CLAUDE.md
@@ -79,8 +78,8 @@ uvicorn main:app --reload --port 8001
 ### Docker
 
 ```bash
-# 开发环境 - 仅数据库
-docker-compose -f docker-compose.dev.yml up -d
+# 开发环境
+docker-compose up -d
 
 # 生产环境
 docker-compose -f docker-compose.prod.yml up -d
