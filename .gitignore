@@ -35,6 +35,8 @@ build/
 *.db
 *.sqlite
 *.sqlite3
+*.sql
+import_backup.ps1
 
 # Temp files
 temp_*.json
