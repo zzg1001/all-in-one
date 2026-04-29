@@ -68,10 +68,10 @@ class Settings(BaseSettings):
     skills_storage_temp_dir: str = ""
 
     # ========== MinIO Configuration ==========
-    minio_endpoint: str = "8.153.198.194"
-    minio_port: int = 8092
-    minio_access_key: str = "admin"
-    minio_secret_key: str = "yourpassword123"
+    minio_endpoint: str = ""
+    minio_port: int = 9000
+    minio_access_key: str = ""
+    minio_secret_key: str = ""
     minio_secure: bool = False
     minio_region: str = ""
 

@@ -3,6 +3,19 @@
 import pymysql
 from pymysql.constants import CLIENT
 import sys
+import os
+from dotenv import load_dotenv
+
+# 加载环境变量
+load_dotenv("deploy.env")
+load_dotenv(".env")
+
+# 数据库配置
+DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
+DB_PORT = int(os.getenv("DB_PORT", "3306"))
+DB_USER = os.getenv("DB_USER", "root")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+DB_NAME = os.getenv("DB_NAME", "ai_agent")
 
 
 def read_sql_file(filepath):
@@ -40,11 +53,11 @@ def main():
     # 连接数据库（启用多语句模式）
     print("连接数据库...")
     conn = pymysql.connect(
-        host='127.0.0.1',
-        port=3306,
-        user='root',
-        password='root123456',
-        database='ai_agent',
+        host=DB_HOST,
+        port=DB_PORT,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        database=DB_NAME,
         charset='utf8mb4',
         autocommit=True,
         client_flag=CLIENT.MULTI_STATEMENTS
@@ -74,11 +87,11 @@ def main():
         # 回退到逐条执行
         conn.close()
         conn = pymysql.connect(
-            host='127.0.0.1',
-            port=3306,
-            user='root',
-            password='root123456',
-            database='ai_agent',
+            host=DB_HOST,
+            port=DB_PORT,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME,
             charset='utf8mb4',
             autocommit=True
         )
