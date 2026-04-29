@@ -856,7 +856,7 @@ watch(() => props.departmentName, (newVal, oldVal) => {
               :title="note.name"
               @click.stop="startEdit(note, $event)"
               :class="{ 'no-edit': !canEdit(note.id) }"
-            >{{ note.file_type === 'folder' ? note.name : getDisplayName(note.name) }}</div>
+            >{{ note.name || '未命名' }}</div>
           </div>
           <!-- 上传卡片/占位符（文件夹内始终显示） -->
           <div v-if="firstNotes.length < 16 && canUpload" class="card upload-card" :class="{ 'has-error': loadError && !isLoading }" @click.stop="handleUploadCardClick">
@@ -907,7 +907,7 @@ watch(() => props.departmentName, (newVal, oldVal) => {
               :title="note.name"
               @click.stop="startEdit(note, $event)"
               :class="{ 'no-edit': !canEdit(note.id) }"
-            >{{ note.file_type === 'folder' ? note.name : getDisplayName(note.name) }}</div>
+            >{{ note.name || '未命名' }}</div>
           </div>
           <!-- 上传卡片（前16个满了显示在这里） -->
           <div v-if="firstNotes.length >= 16 && canUpload" class="card upload-card" @click="isLoading ? null : triggerUpload()">
@@ -1187,33 +1187,32 @@ watch(() => props.departmentName, (newVal, oldVal) => {
 
 /* 前16个：横向排列（4列×4行，按行填充） */
 .grid-horizontal {
-  grid-template-columns: repeat(4, 100px);
-  grid-template-rows: repeat(4, 95px);
+  grid-template-columns: repeat(4, 130px);
+  grid-template-rows: repeat(4, 115px);
   grid-auto-flow: row;
 }
 
 /* 超出部分：竖向排列（按列填充） */
 .grid-vertical {
   grid-auto-flow: column;
-  grid-template-rows: repeat(4, 95px);
-  grid-auto-columns: 100px;
+  grid-template-rows: repeat(4, 115px);
+  grid-auto-columns: 130px;
 }
 
-/* 卡片 - 正方形 */
+/* 卡片 */
 .card {
   position: relative;
   background: #fff;
   border: 1px solid #e8e4d0;
   border-radius: 8px;
-  padding: 18px 6px 6px;
+  padding: 16px 8px 8px;
   cursor: pointer;
   transition: all 0.15s;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  position: relative;
-  min-height: 76px;
+  justify-content: flex-start;
+  min-height: 100px;
 }
 
 .card:hover {
@@ -1313,8 +1312,8 @@ watch(() => props.departmentName, (newVal, oldVal) => {
 
 /* 文件图标 - 背景图 */
 .card-icon {
-  width: 50px;
-  height: 50px;
+  width: 46px;
+  height: 46px;
   flex-shrink: 0;
   background-size: contain;
   background-repeat: no-repeat;
@@ -1392,27 +1391,37 @@ watch(() => props.departmentName, (newVal, oldVal) => {
 }
 
 .card-name {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
   color: #333;
   text-align: center;
   width: 100%;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  word-break: break-all;
+  line-height: 1.25;
+  max-height: 3.75em;
   margin-top: 4px;
-  padding: 1px 3px;
-  border-radius: 2px;
+  padding: 2px 6px;
+  border-radius: 3px;
   cursor: text;
+  transition: all 0.15s;
 }
 
 .card-name:hover {
-  background: rgba(0,0,0,0.04);
+  background: rgba(33, 150, 243, 0.1);
+  color: #1565c0;
 }
 
 .card-name.no-edit {
   cursor: default;
-  pointer-events: none;
+}
+
+.card-name.no-edit:hover {
+  background: transparent;
+  color: #333;
 }
 
 .edit-input {

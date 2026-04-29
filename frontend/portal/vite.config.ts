@@ -6,8 +6,8 @@ import vueDevTools from 'vite-plugin-vue-devtools'
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
-  // 生产环境使用 /portal/ 路径
-  const base = mode === 'production' ? '/portal/' : '/'
+  // Docker 部署时使用根路径
+  const base = '/'
 
   return {
     base,

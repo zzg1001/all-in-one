@@ -310,10 +310,9 @@ async def get_data_note(
     user_id: str = Depends(get_user_id),
     db: Session = Depends(get_db)
 ):
-    """获取单个数据便签"""
+    """获取单个数据便签（按 ID 查询，不限制 user_id）"""
     note = db.query(DataNote).filter(
-        DataNote.id == note_id,
-        DataNote.user_id == user_id
+        DataNote.id == note_id
     ).first()
 
     if not note:
@@ -330,21 +329,25 @@ async def create_data_note(
 ):
     """创建数据便签"""
     level = 0
+    agent_id = data.agent_id  # 可能为 None
+
     if data.parent_id:
-        # 检查父文件夹
+        # 先查找父文件夹（只按 ID 查找）
         parent = db.query(DataNote).filter(
             DataNote.id == data.parent_id,
-            DataNote.user_id == user_id,
             DataNote.file_type == 'folder'
         ).first()
         if not parent:
             raise HTTPException(status_code=404, detail="父文件夹不存在")
         level = parent.level + 1
+        # 如果没有传 agent_id，从父文件夹继承
+        if not agent_id:
+            agent_id = parent.agent_id
 
     note = DataNote(
         id=str(uuid.uuid4()),
         user_id=user_id,
-        agent_id=data.agent_id,
+        agent_id=agent_id,
         name=data.name,
         description=data.description,
         file_type=data.file_type,
@@ -398,10 +401,9 @@ async def update_data_note(
     user_id: str = Depends(get_user_id),
     db: Session = Depends(get_db)
 ):
-    """更新数据便签"""
+    """更新数据便签（按 ID 查询，不限制 user_id）"""
     note = db.query(DataNote).filter(
-        DataNote.id == note_id,
-        DataNote.user_id == user_id
+        DataNote.id == note_id
     ).first()
 
     if not note:
@@ -427,7 +429,6 @@ async def delete_data_note(
 
     note = db.query(DataNote).filter(
         DataNote.id == note_id,
-        DataNote.user_id == user_id,
         DataNote.deleted_at.is_(None)  # 只能删除未删除的
     ).first()
 
@@ -436,9 +437,9 @@ async def delete_data_note(
 
     now = datetime.now()
 
-    # 如果是文件夹，递归软删除内容
+    # 如果是文件夹，递归软删除内容（按 agent_id 隔离）
     if note.file_type == 'folder':
-        soft_delete_folder_contents(db, user_id, note_id, now)
+        soft_delete_folder_contents(db, note.agent_id, note_id, now)
 
     # 软删除当前记录
     note.deleted_at = now
@@ -448,17 +449,17 @@ async def delete_data_note(
     return None
 
 
-def soft_delete_folder_contents(db: Session, user_id: str, folder_id: str, deleted_at):
-    """递归软删除文件夹内容"""
+def soft_delete_folder_contents(db: Session, agent_id: str, folder_id: str, deleted_at):
+    """递归软删除文件夹内容（按 agent_id 隔离）"""
     children = db.query(DataNote).filter(
-        DataNote.user_id == user_id,
+        DataNote.agent_id == agent_id,
         DataNote.parent_id == folder_id,
         DataNote.deleted_at.is_(None)
     ).all()
 
     for child in children:
         if child.file_type == 'folder':
-            soft_delete_folder_contents(db, user_id, child.id, deleted_at)
+            soft_delete_folder_contents(db, agent_id, child.id, deleted_at)
         child.deleted_at = deleted_at
 
 
@@ -491,37 +492,37 @@ async def delete_physical_file(file_url: str):
         print(f"[Delete] 本地文件删除失败: {e}")
 
 
-def collect_files_in_folder(db: Session, user_id: str, folder_id: str) -> List[tuple]:
-    """收集文件夹内所有文件的信息（用于删除文件和向量索引）
+def collect_files_in_folder(db: Session, agent_id: str, folder_id: str) -> List[tuple]:
+    """收集文件夹内所有文件的信息（用于删除文件和向量索引，按 agent_id 隔离）
 
     Returns:
         List of (file_id, file_url) tuples
     """
     files = []
     children = db.query(DataNote).filter(
-        DataNote.user_id == user_id,
+        DataNote.agent_id == agent_id,
         DataNote.parent_id == folder_id
     ).all()
 
     for child in children:
         if child.file_type == 'folder':
-            files.extend(collect_files_in_folder(db, user_id, child.id))
+            files.extend(collect_files_in_folder(db, agent_id, child.id))
         elif child.file_url:
             files.append((child.id, child.file_url))
 
     return files
 
 
-def delete_folder_contents(db: Session, user_id: str, folder_id: str):
-    """递归删除文件夹内容"""
+def delete_folder_contents(db: Session, agent_id: str, folder_id: str):
+    """递归删除文件夹内容（按 agent_id 隔离）"""
     children = db.query(DataNote).filter(
-        DataNote.user_id == user_id,
+        DataNote.agent_id == agent_id,
         DataNote.parent_id == folder_id
     ).all()
 
     for child in children:
         if child.file_type == 'folder':
-            delete_folder_contents(db, user_id, child.id)
+            delete_folder_contents(db, agent_id, child.id)
         db.delete(child)
 
 
@@ -531,10 +532,9 @@ async def toggle_favorite(
     user_id: str = Depends(get_user_id),
     db: Session = Depends(get_db)
 ):
-    """切换便签的收藏状态"""
+    """切换便签的收藏状态（按 ID 查询，不限制 user_id）"""
     note = db.query(DataNote).filter(
-        DataNote.id == note_id,
-        DataNote.user_id == user_id
+        DataNote.id == note_id
     ).first()
 
     if not note:
@@ -555,25 +555,35 @@ async def create_folder(
 ):
     """创建文件夹并移入选中的文件"""
     level = 0
+    agent_id = data.agent_id  # 可能为 None
+
     if data.parent_id:
+        # 先查找父文件夹（只按 ID 查找）
         parent = db.query(DataNote).filter(
             DataNote.id == data.parent_id,
-            DataNote.user_id == user_id,
             DataNote.file_type == 'folder'
         ).first()
         if not parent:
             raise HTTPException(status_code=404, detail="父文件夹不存在")
         level = parent.level + 1
+        # 如果没有传 agent_id，从父文件夹继承
+        if not agent_id:
+            agent_id = parent.agent_id
 
     if level >= MAX_FOLDER_LEVEL:
         raise HTTPException(status_code=400, detail=f"最多支持 {MAX_FOLDER_LEVEL} 层文件夹")
 
     # 检查是否已存在同名文件夹（防止重复创建）
     existing_query = db.query(DataNote).filter(
-        DataNote.user_id == user_id,
         DataNote.name == data.name,
         DataNote.file_type == 'folder'
     )
+    # agent_id 过滤
+    if agent_id:
+        existing_query = existing_query.filter(DataNote.agent_id == agent_id)
+    else:
+        existing_query = existing_query.filter(DataNote.agent_id.is_(None))
+    # parent_id 过滤
     if data.parent_id:
         existing_query = existing_query.filter(DataNote.parent_id == data.parent_id)
     else:
@@ -583,7 +593,6 @@ async def create_folder(
     if existing:
         # 已存在，直接返回
         item_count = db.query(sql_func.count(DataNote.id)).filter(
-            DataNote.user_id == user_id,
             DataNote.parent_id == existing.id
         ).scalar()
         return DataNoteResponse(
@@ -607,7 +616,7 @@ async def create_folder(
     folder = DataNote(
         id=str(uuid.uuid4()),
         user_id=user_id,
-        agent_id=data.agent_id,
+        agent_id=agent_id,  # 使用继承的 agent_id
         name=data.name,
         file_type='folder',
         file_url=None,
@@ -620,8 +629,7 @@ async def create_folder(
     # 移动选中的文件到文件夹
     if data.item_ids:
         items = db.query(DataNote).filter(
-            DataNote.id.in_(data.item_ids),
-            DataNote.user_id == user_id
+            DataNote.id.in_(data.item_ids)
         ).all()
         for item in items:
             item.parent_id = folder.id
@@ -657,10 +665,9 @@ async def move_to_folder(
     user_id: str = Depends(get_user_id),
     db: Session = Depends(get_db)
 ):
-    """移动文件到指定文件夹"""
+    """移动文件到指定文件夹（按 agent_id 隔离）"""
     note = db.query(DataNote).filter(
-        DataNote.id == note_id,
-        DataNote.user_id == user_id
+        DataNote.id == note_id
     ).first()
 
     if not note:
@@ -668,9 +675,10 @@ async def move_to_folder(
 
     new_level = 0
     if data.target_folder_id:
+        # 使用源文件的 agent_id 查找目标文件夹
         target = db.query(DataNote).filter(
             DataNote.id == data.target_folder_id,
-            DataNote.user_id == user_id,
+            DataNote.agent_id == note.agent_id,
             DataNote.file_type == 'folder'
         ).first()
         if not target:
@@ -680,7 +688,7 @@ async def move_to_folder(
         # 检查层级限制
         if note.file_type == 'folder':
             # 如果移动的是文件夹，检查其子项的最大深度
-            max_child_depth = get_max_depth(db, user_id, note.id)
+            max_child_depth = get_max_depth(db, note.agent_id, note.id)
             if new_level + max_child_depth > MAX_FOLDER_LEVEL:
                 raise HTTPException(status_code=400, detail=f"超出最大层级限制（{MAX_FOLDER_LEVEL}层）")
 
@@ -689,17 +697,17 @@ async def move_to_folder(
 
     # 如果是文件夹，更新所有子项的层级
     if note.file_type == 'folder':
-        update_children_level(db, user_id, note.id, new_level + 1)
+        update_children_level(db, note.agent_id, note.id, new_level + 1)
 
     db.commit()
     db.refresh(note)
     return note
 
 
-def get_max_depth(db: Session, user_id: str, folder_id: str) -> int:
-    """获取文件夹内最大深度"""
+def get_max_depth(db: Session, agent_id: str, folder_id: str) -> int:
+    """获取文件夹内最大深度（按 agent_id 隔离）"""
     children = db.query(DataNote).filter(
-        DataNote.user_id == user_id,
+        DataNote.agent_id == agent_id,
         DataNote.parent_id == folder_id
     ).all()
 
@@ -709,40 +717,35 @@ def get_max_depth(db: Session, user_id: str, folder_id: str) -> int:
     max_depth = 0
     for child in children:
         if child.file_type == 'folder':
-            depth = 1 + get_max_depth(db, user_id, child.id)
+            depth = 1 + get_max_depth(db, agent_id, child.id)
             max_depth = max(max_depth, depth)
         else:
             max_depth = max(max_depth, 0)
     return max_depth
 
 
-def update_children_level(db: Session, user_id: str, folder_id: str, new_level: int):
-    """递归更新子项层级"""
+def update_children_level(db: Session, agent_id: str, folder_id: str, new_level: int):
+    """递归更新子项层级（按 agent_id 隔离）"""
     children = db.query(DataNote).filter(
-        DataNote.user_id == user_id,
+        DataNote.agent_id == agent_id,
         DataNote.parent_id == folder_id
     ).all()
 
     for child in children:
         child.level = new_level
         if child.file_type == 'folder':
-            update_children_level(db, user_id, child.id, new_level + 1)
+            update_children_level(db, agent_id, child.id, new_level + 1)
 
 
 @router.get("/data-notes/{note_id}/download-zip")
 async def download_folder_as_zip(
     note_id: str,
-    x_user_id: Optional[str] = None,
     user_id: str = Depends(get_user_id),
     db: Session = Depends(get_db)
 ):
-    # 支持 query param 方式传递 user_id（用于下载链接）
-    if x_user_id:
-        user_id = x_user_id
-    """下载文件夹为zip"""
+    """下载文件夹为zip（按 agent_id 隔离）"""
     note = db.query(DataNote).filter(
-        DataNote.id == note_id,
-        DataNote.user_id == user_id
+        DataNote.id == note_id
     ).first()
 
     if not note:
@@ -756,7 +759,7 @@ async def download_folder_as_zip(
     zip_path = Path(temp_dir) / f"{note.name}.zip"
 
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-        add_folder_to_zip(db, user_id, note_id, zf, "")
+        add_folder_to_zip(db, note.agent_id, note_id, zf, "")
 
     return FileResponse(
         path=zip_path,
@@ -765,12 +768,12 @@ async def download_folder_as_zip(
     )
 
 
-def add_folder_to_zip(db: Session, user_id: str, folder_id: str, zf: zipfile.ZipFile, path_prefix: str):
-    """递归添加文件夹内容到zip"""
+def add_folder_to_zip(db: Session, agent_id: str, folder_id: str, zf: zipfile.ZipFile, path_prefix: str):
+    """递归添加文件夹内容到zip（按 agent_id 隔离）"""
     from app.core.config import get_outputs_dir
 
     children = db.query(DataNote).filter(
-        DataNote.user_id == user_id,
+        DataNote.agent_id == agent_id,
         DataNote.parent_id == folder_id
     ).all()
 
@@ -778,7 +781,7 @@ def add_folder_to_zip(db: Session, user_id: str, folder_id: str, zf: zipfile.Zip
         if child.file_type == 'folder':
             # 递归处理子文件夹
             new_prefix = f"{path_prefix}{child.name}/" if path_prefix else f"{child.name}/"
-            add_folder_to_zip(db, user_id, child.id, zf, new_prefix)
+            add_folder_to_zip(db, agent_id, child.id, zf, new_prefix)
         elif child.file_url:
             # 确保文件存在于本地（从 MinIO 拉取如果需要）
             file_path = ensure_local_file_sync(child.file_url)
@@ -793,10 +796,9 @@ async def get_folder_files(
     user_id: str = Depends(get_user_id),
     db: Session = Depends(get_db)
 ):
-    """获取文件夹内的文件（只取第一层，不递归子文件夹）"""
+    """获取文件夹内的文件（只取第一层，不递归子文件夹，按 agent_id 隔离）"""
     note = db.query(DataNote).filter(
-        DataNote.id == note_id,
-        DataNote.user_id == user_id
+        DataNote.id == note_id
     ).first()
 
     if not note:
@@ -805,9 +807,9 @@ async def get_folder_files(
     if note.file_type != 'folder':
         raise HTTPException(status_code=400, detail="不是文件夹")
 
-    # 只获取直接子文件（不包括子文件夹）
+    # 只获取直接子文件（不包括子文件夹，按 agent_id 隔离）
     children = db.query(DataNote).filter(
-        DataNote.user_id == user_id,
+        DataNote.agent_id == note.agent_id,
         DataNote.parent_id == note_id,
         DataNote.file_type != 'folder'
     ).all()
@@ -825,16 +827,16 @@ async def get_folder_files(
     return files
 
 
-def collect_folder_files_recursive(db: Session, user_id: str, folder_id: str, files: list):
-    """递归收集文件夹内的所有文件（用于 zip 下载等场景）"""
+def collect_folder_files_recursive(db: Session, agent_id: str, folder_id: str, files: list):
+    """递归收集文件夹内的所有文件（用于 zip 下载等场景，按 agent_id 隔离）"""
     children = db.query(DataNote).filter(
-        DataNote.user_id == user_id,
+        DataNote.agent_id == agent_id,
         DataNote.parent_id == folder_id
     ).all()
 
     for child in children:
         if child.file_type == 'folder':
-            collect_folder_files_recursive(db, user_id, child.id, files)
+            collect_folder_files_recursive(db, agent_id, child.id, files)
         elif child.file_url:
             files.append({
                 "id": child.id,

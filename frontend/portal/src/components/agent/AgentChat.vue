@@ -3497,13 +3497,13 @@ const executeSkills = async (messageId: number, skills: SkillStep[], startIndex:
               if (dataNode?.dataNote?.file_url) {
                 const fileUrl = dataNode.dataNote.file_url
                 let extractedPath = ''
-                const filesMatch = fileUrl.match(/\/(files\/[^?]+)/) || fileUrl.match(/\/(uploads\/[^?]+)/)
+                const filesMatch = fileUrl.match(/\/(files\/[^?]+)/) || fileUrl.match(/\/(uploads\/[^?]+)/) || fileUrl.match(/\/(file-manage\/[^?]+)/)
                 if (filesMatch) {
-                  extractedPath = filesMatch[1]
+                  extractedPath = '/' + filesMatch[1]  // 保留前导斜杠
                 } else if (fileUrl.startsWith('/')) {
-                  extractedPath = fileUrl.substring(1)
+                  extractedPath = fileUrl  // 已经有前导斜杠
                 } else {
-                  extractedPath = fileUrl
+                  extractedPath = '/' + fileUrl  // 添加前导斜杠
                 }
                 if (extractedPath) {
                   filePaths = [extractedPath, ...filePaths]
@@ -3797,11 +3797,11 @@ const executeSkillsParallel = async (messageId: number) => {
                 if (dataNode?.dataNote?.file_url) {
                   const fileUrl = dataNode.dataNote.file_url
                   console.log(`[Skill Parallel] Raw file_url:`, fileUrl)
-                  // 提取服务器路径 - 支持多种格式
+                  // 提取服务器路径 - 支持多种格式（包括 file-manage）
                   let extractedPath = ''
-                  const filesMatch = fileUrl.match(/\/(files\/[^?]+)/) || fileUrl.match(/\/(uploads\/[^?]+)/)
+                  const filesMatch = fileUrl.match(/\/(files\/[^?]+)/) || fileUrl.match(/\/(uploads\/[^?]+)/) || fileUrl.match(/\/(file-manage\/[^?]+)/)
                   if (filesMatch) {
-                    extractedPath = filesMatch[1]
+                    extractedPath = '/' + filesMatch[1]  // 保留前导斜杠
                   } else if (fileUrl.startsWith('http')) {
                     // 完整 URL，提取路径部分
                     try {
@@ -3836,14 +3836,14 @@ const executeSkillsParallel = async (messageId: number) => {
                     predecessorFiles.push(serverPath)
                     console.log(`[Skill Parallel] Found predecessor output for "${step.skillName}": ${serverPath}`)
                   } else {
-                    // 其他格式的 URL
-                    const filesMatch = url.match(/\/(files\/[^?]+)/) || url.match(/\/(uploads\/[^?]+)/)
+                    // 其他格式的 URL（包括 file-manage）
+                    const filesMatch = url.match(/\/(files\/[^?]+)/) || url.match(/\/(uploads\/[^?]+)/) || url.match(/\/(file-manage\/[^?]+)/)
                     if (filesMatch) {
-                      predecessorFiles.push(filesMatch[1])
-                      console.log(`[Skill Parallel] Found predecessor file for "${step.skillName}": ${filesMatch[1]}`)
+                      predecessorFiles.push('/' + filesMatch[1])  // 保留前导斜杠
+                      console.log(`[Skill Parallel] Found predecessor file for "${step.skillName}": /${filesMatch[1]}`)
                     } else if (url.startsWith('/')) {
-                      predecessorFiles.push(url.substring(1))
-                      console.log(`[Skill Parallel] Found predecessor path for "${step.skillName}": ${url.substring(1)}`)
+                      predecessorFiles.push(url)  // 保留原始路径
+                      console.log(`[Skill Parallel] Found predecessor path for "${step.skillName}": ${url}`)
                     }
                   }
                 }

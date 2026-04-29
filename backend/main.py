@@ -2,6 +2,11 @@
 AI Skills Platform API - 统一服务
 合并 Admin + Portal API
 """
+import logging
+import os
+from datetime import datetime
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -9,6 +14,21 @@ from contextlib import asynccontextmanager
 
 from app.core.config import get_settings, get_outputs_dir, get_uploads_dir, get_file_manage_dir
 from app.core.database import init_db
+
+# ========== 日志配置 ==========
+LOG_DIR = Path("/app/logs") if os.path.exists("/app") else Path("./logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+log_file = LOG_DIR / f"app_{datetime.now().strftime('%Y%m%d')}.log"
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.FileHandler(log_file, encoding="utf-8"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # Admin API
 from app.api.v1 import dashboard, models, tokens, users, logs, permissions, ccswitch, auth, feedback as admin_feedback
@@ -37,6 +57,9 @@ FILE_MANAGE_DIR = get_file_manage_dir()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    logger.info("=" * 50)
+    logger.info("AI Skills Platform API 启动中...")
+    logger.info(f"日志目录: {LOG_DIR}")
     init_db()
     setup_log_handler()
     sys_ready()

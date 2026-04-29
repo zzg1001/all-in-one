@@ -42,20 +42,34 @@ async function request<T>(
 // ============ Dashboard API ============
 
 export interface DashboardStats {
-  today_calls: number
+  today_sessions: number
+  today_messages: number
+  today_executions: number
   today_tokens: number
+  total_sessions: number
+  total_messages: number
+  total_tokens: number
   active_users: number
   success_rate: number
-  trends: {
-    calls: number[]
-    tokens: number[]
-    dates: string[]
-  }
+  avg_latency: number
+  skill_count: number
+  agent_count: number
+  pending_feedbacks: number
+  total_feedbacks: number
+  session_growth: number
+}
+
+export interface DashboardTrends {
+  dates: string[]
+  sessions: number[]
+  messages: number[]
+  executions: number[]
+  tokens: number[]
 }
 
 export const dashboardApi = {
   getStats: () => request<DashboardStats>('/dashboard/stats'),
-  getTrends: (days: number = 7) => request<DashboardStats['trends']>(`/dashboard/trends?days=${days}`),
+  getTrends: (days: number = 7) => request<DashboardTrends>(`/dashboard/trends?days=${days}`),
 }
 
 // ============ Models API ============
