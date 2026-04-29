@@ -5,6 +5,7 @@ from portal.models.favorite import UserFavorite
 from portal.models.data_note import DataNote
 from portal.models.chat import ChatSession, ChatMessage
 from portal.models.agent import Agent, AgentMemory, AgentExecution
+from portal.models.feedback import UserFeedback
 
 # CCConfig 使用 admin 的定义: app.models.ccconfig
 from app.models.ccconfig import CCConfig
@@ -12,5 +13,5 @@ from app.models.ccconfig import CCConfig
 __all__ = [
     "Skill", "Workflow", "WorkflowExecution", "UserFavorite", "DataNote",
     "CCConfig", "ChatSession", "ChatMessage",
-    "Agent", "AgentMemory", "AgentExecution"
+    "Agent", "AgentMemory", "AgentExecution", "UserFeedback"
 ]

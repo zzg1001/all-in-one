@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, computed, onUnmounted, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { agentApi, dataNotesApi, agentLoopApi, type ChatMessage, type DataNote, type SkillChatRequest, type SkillChatEvent, type SkillExecuteInteractiveRequest, type SkillExecuteInteractiveEvent, type ExecutionStep, type AgentLoopRequest, type AgentLoopEvent, type AgentLoopMessage, type ToolCall, type ChatStreamEvent } from '@/api'
+import { agentApi, dataNotesApi, agentLoopApi, feedbackApi, type ChatMessage, type DataNote, type SkillChatRequest, type SkillChatEvent, type SkillExecuteInteractiveRequest, type SkillExecuteInteractiveEvent, type ExecutionStep, type AgentLoopRequest, type AgentLoopEvent, type AgentLoopMessage, type ToolCall, type ChatStreamEvent } from '@/api'
 import config from '@/config'
 import SlashCommandPopup from './SlashCommandPopup.vue'
 import ChatHistory from './ChatHistory.vue'
+import FeedbackModal from './FeedbackModal.vue'
 import { useContextStore } from '@/stores/context'
 import { ContextPicker } from './context'
 import { chatSessionsApi, type ChatSession, type ChatSessionMessage } from '@/api'
@@ -1020,6 +1021,28 @@ const activeGroupId = ref<string | null>(null)  // 当前选中的流程组
 const showDeleteConfirm = ref(false)
 const pendingDeleteGroupId = ref<string | null>(null)
 const pendingSaveGroup = ref<PipelineGroup | null>(null)
+
+// 问题反馈弹窗
+const showFeedbackModal = ref(false)
+
+const handleFeedbackSubmit = async (data: { feedback_type: string; title: string; description: string; session_id?: string }) => {
+  try {
+    await feedbackApi.submit({
+      feedback_type: data.feedback_type as 'bug' | 'suggestion' | 'other',
+      title: data.title,
+      description: data.description,
+      session_id: currentSessionId.value || undefined,
+      agent_id: props.agentId,
+      agent_name: agentName.value
+    })
+    showFeedbackModal.value = false
+    // 简单提示，不在对话中显示
+    alert('感谢您的反馈！')
+  } catch (e) {
+    console.error('提交反馈失败:', e)
+    alert('提交反馈失败，请稍后重试')
+  }
+}
 
 // 技能执行面板状态
 const showSkillExecution = ref(false)
@@ -5047,6 +5070,12 @@ const openInNewTab = (url: string) => {
           </svg>
           <span>新会话</span>
         </button>
+        <button class="header-action-btn feedback-btn" @click="showFeedbackModal = true" title="问题反馈">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+          </svg>
+          <span>反馈</span>
+        </button>
         <div class="skill-count">
           <span class="count-number">{{ installedSkillCount }}</span>
           <span class="count-label">可用技能</span>
@@ -6262,6 +6291,14 @@ const openInNewTab = (url: string) => {
         </div>
       </div>
     </Transition>
+
+    <!-- 问题反馈弹窗 -->
+    <FeedbackModal
+      :visible="showFeedbackModal"
+      :session-id="currentSessionId || undefined"
+      @close="showFeedbackModal = false"
+      @submit="handleFeedbackSubmit"
+    />
   </div>
 </template>
 

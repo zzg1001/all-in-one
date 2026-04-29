@@ -56,6 +56,18 @@ const router = createRouter({
       name: 'apis',
       component: () => import('@/views/apis/ApisView.vue'),
       meta: { title: 'API 管理', requiresAuth: true }
+    },
+    {
+      path: '/feedback',
+      name: 'feedback',
+      component: () => import('@/views/feedback/FeedbackView.vue'),
+      meta: { title: '用户反馈', requiresAuth: true }
+    },
+    {
+      path: '/agents',
+      name: 'agents',
+      component: () => import('@/views/agents/AgentsView.vue'),
+      meta: { title: 'Agent 数据权限', requiresAuth: true }
     }
   ]
 })

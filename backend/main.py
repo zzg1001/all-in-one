@@ -11,7 +11,7 @@ from app.core.config import get_settings, get_outputs_dir, get_uploads_dir, get_
 from app.core.database import init_db
 
 # Admin API
-from app.api.v1 import dashboard, models, tokens, users, logs, permissions, ccswitch, auth
+from app.api.v1 import dashboard, models, tokens, users, logs, permissions, ccswitch, auth, feedback as admin_feedback
 
 # Portal API
 from portal.routers import skills_router, workflows_router, agent_router, executions_router, data_notes_router, chat_router
@@ -21,6 +21,7 @@ from portal.routers.agents import router as agents_router
 from portal.routers.agent_modules import router as agent_modules_router
 from portal.routers.storage import router as storage_router
 from portal.routers.cleanup import router as cleanup_router
+from portal.routers.feedback import router as portal_feedback_router
 
 # Portal models (确保表被创建)
 import portal.models  # noqa: F401
@@ -81,6 +82,7 @@ app.include_router(users.router, prefix="/api/users", tags=["Admin - Users"])
 app.include_router(logs.router, prefix="/api/logs", tags=["Admin - Logs"])
 app.include_router(permissions.router, prefix="/api/permissions", tags=["Admin - Permissions"])
 app.include_router(ccswitch.router, prefix="/api/ccswitch", tags=["Admin - CCSwitch"])
+app.include_router(admin_feedback.router, tags=["Admin - Feedback"])
 
 # ========== Portal API Routers ==========
 app.include_router(skills_router, tags=["Portal - Skills"])
@@ -95,6 +97,7 @@ app.include_router(agents_router, tags=["Portal - Agents"])
 app.include_router(agent_modules_router, tags=["Portal - AgentModules"])
 app.include_router(storage_router, tags=["Portal - Storage"])
 app.include_router(cleanup_router, tags=["Portal - Cleanup"])
+app.include_router(portal_feedback_router, tags=["Portal - Feedback"])
 
 # 静态文件服务
 app.mount("/outputs", StaticFiles(directory=str(OUTPUTS_DIR)), name="outputs")

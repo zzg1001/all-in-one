@@ -52,6 +52,9 @@ def init_db():
 
     Base.metadata.create_all(bind=engine)
 
+    # 运行数据库迁移
+    _run_migrations()
+
     # 初始化默认用户
     from app.core.init_users import init_default_users
     db = SessionLocal()
@@ -59,3 +62,37 @@ def init_db():
         init_default_users(db)
     finally:
         db.close()
+
+
+def _run_migrations():
+    """运行数据库迁移 - 添加缺失的列"""
+    from sqlalchemy import text, inspect
+
+    inspector = inspect(engine)
+
+    with engine.connect() as conn:
+        # user_feedbacks 表迁移
+        if 'user_feedbacks' in inspector.get_table_names():
+            columns = [col['name'] for col in inspector.get_columns('user_feedbacks')]
+
+            if 'agent_id' not in columns:
+                conn.execute(text('ALTER TABLE user_feedbacks ADD COLUMN agent_id VARCHAR(50)'))
+                print('[Migration] Added agent_id column to user_feedbacks')
+
+            if 'agent_name' not in columns:
+                conn.execute(text('ALTER TABLE user_feedbacks ADD COLUMN agent_name VARCHAR(100)'))
+                print('[Migration] Added agent_name column to user_feedbacks')
+
+            if 'updated_at' not in columns:
+                conn.execute(text('ALTER TABLE user_feedbacks ADD COLUMN updated_at DATETIME'))
+                print('[Migration] Added updated_at column to user_feedbacks')
+
+        # agents 表迁移
+        if 'agents' in inspector.get_table_names():
+            columns = [col['name'] for col in inspector.get_columns('agents')]
+
+            if 'accessible_agent_ids' not in columns:
+                conn.execute(text('ALTER TABLE agents ADD COLUMN accessible_agent_ids JSON'))
+                print('[Migration] Added accessible_agent_ids column to agents')
+
+        conn.commit()

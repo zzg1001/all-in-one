@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import AsyncIterator, Optional, List, Dict, Any
 
 from sqlalchemy.orm import Session
+import uuid
 
 from app.core.config import (
     get_settings,
@@ -227,6 +228,82 @@ def _read_files_for_ai(file_paths: list, max_total_chars: int = 250000) -> str:
             contents.append(f"\n### 文件: {file_path}\n[读取错误: {str(e)}]")
 
     return "\n".join(contents)
+
+
+# ==================== 执行统计（异步后台处理）====================
+
+def _record_execution_sync(
+    agent_id: str,
+    execution_type: str,
+    status: str,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    latency_ms: float = 0,
+    error_message: str = None
+):
+    """同步记录执行统计（在线程池中执行）"""
+    from portal.models.agent import AgentExecution, Agent
+    from app.core.database import SessionLocal
+    from datetime import datetime
+
+    db = SessionLocal()
+    try:
+        # 创建执行记录
+        execution = AgentExecution(
+            id=str(uuid.uuid4()),
+            agent_id=agent_id,
+            execution_type=execution_type,
+            status=status,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=input_tokens + output_tokens,
+            latency_ms=latency_ms,
+            error_message=error_message,
+            started_at=datetime.now(),
+            completed_at=datetime.now() if status in ['completed', 'failed'] else None,
+        )
+        db.add(execution)
+
+        # 更新 Agent 使用次数
+        if agent_id:
+            agent = db.query(Agent).filter(Agent.id == agent_id).first()
+            if agent:
+                agent.usage_count = (agent.usage_count or 0) + 1
+
+        db.commit()
+        print(f"[Stats] 记录执行: agent={agent_id}, tokens={input_tokens}+{output_tokens}, latency={round(latency_ms)}ms, status={status}")
+    except Exception as e:
+        print(f"[Stats] 记录执行失败: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+
+def _record_execution_background(
+    agent_id: str,
+    execution_type: str,
+    status: str,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    latency_ms: float = 0,
+    error_message: str = None
+):
+    """后台异步记录执行统计（不阻塞主流程）"""
+    import concurrent.futures
+
+    # 使用线程池在后台执行，不阻塞主流程
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    executor.submit(
+        _record_execution_sync,
+        agent_id,
+        execution_type,
+        status,
+        input_tokens,
+        output_tokens,
+        latency_ms,
+        error_message
+    )
+    # 不等待结果，让它在后台运行
 
 
 # ==================== Agent SDK Service ====================
@@ -496,7 +573,7 @@ class AgentSDKService:
             print(f"[AgentSDKService] 获取技能工具失败: {e}")
             return []
 
-    async def _execute_tool(self, tool_name: str, tool_input: Dict, file_paths: List[str] = None) -> Dict:
+    async def _execute_tool(self, tool_name: str, tool_input: Dict, file_paths: List[str] = None, agent_id: str = None) -> Dict:
         """执行工具调用"""
         # 获取技能 ID
         skill_id = getattr(self, '_skill_tool_map', {}).get(tool_name)
@@ -505,6 +582,10 @@ class AgentSDKService:
 
         # 准备参数
         params = tool_input.copy()
+
+        # 传递 agent_id 用于统计
+        if agent_id:
+            params["agent_id"] = agent_id
 
         # 如果有上传的文件，添加到参数中
         if file_paths:
@@ -612,6 +693,13 @@ class AgentSDKService:
                 messages.append({"role": h["role"], "content": h["content"]})
         messages.append({"role": "user", "content": prompt})
 
+        # 统计变量
+        start_time = time.time()
+        total_input_tokens = 0
+        total_output_tokens = 0
+        execution_status = "completed"
+        error_msg = None
+
         try:
             # Agent 循环 - 处理工具调用
             max_iterations = 5
@@ -661,6 +749,12 @@ class AgentSDKService:
                 )
                 print(f"[chat_stream] Claude 响应 stop_reason: {response.stop_reason}")
 
+                # 累计 token 使用量
+                if hasattr(response, 'usage') and response.usage:
+                    total_input_tokens += response.usage.input_tokens or 0
+                    total_output_tokens += response.usage.output_tokens or 0
+                    print(f"[chat_stream] Token 使用: input={response.usage.input_tokens}, output={response.usage.output_tokens}")
+
                 # 处理响应
                 tool_use_blocks = []
                 text_content = ""
@@ -701,7 +795,8 @@ class AgentSDKService:
                     result = await self._execute_tool(
                         tool_use.name,
                         tool_use.input,
-                        resolved_file_paths
+                        resolved_file_paths,
+                        agent_id
                     )
 
                     # 发送技能结果事件
@@ -743,7 +838,23 @@ class AgentSDKService:
             print(f"[AgentSDKService] 流式对话错误: {e}")
             import traceback
             traceback.print_exc()
+            execution_status = "failed"
+            error_msg = str(e)
             yield f"\n\n[错误] {str(e)}"
+
+        finally:
+            # 后台异步记录执行统计（不阻塞主流程）
+            latency_ms = (time.time() - start_time) * 1000
+            if agent_id:
+                _record_execution_background(
+                    agent_id=agent_id,
+                    execution_type="chat",
+                    status=execution_status,
+                    input_tokens=total_input_tokens,
+                    output_tokens=total_output_tokens,
+                    latency_ms=latency_ms,
+                    error_message=error_msg
+                )
 
     async def chat(
         self,
@@ -931,6 +1042,10 @@ class AgentSDKService:
 2. 输出文件必须保存到 {OUTPUTS_DIR} 目录
 """
 
+        # 获取 agent_id 用于统计
+        agent_id = params.get("agent_id")
+        start_time = time.time()
+
         try:
             # 使用线程池执行同步 API 调用，避免阻塞事件循环
             response = await asyncio.to_thread(
@@ -942,6 +1057,21 @@ class AgentSDKService:
             )
 
             final_output = response.content[0].text
+
+            # 后台异步记录执行统计
+            latency_ms = (time.time() - start_time) * 1000
+            input_tokens = response.usage.input_tokens if hasattr(response, 'usage') and response.usage else 0
+            output_tokens = response.usage.output_tokens if hasattr(response, 'usage') and response.usage else 0
+
+            if agent_id:
+                _record_execution_background(
+                    agent_id=agent_id,
+                    execution_type="skill",
+                    status="completed",
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    latency_ms=latency_ms,
+                )
 
             # 检查输出文件
             output_files = []
@@ -960,6 +1090,15 @@ class AgentSDKService:
 
         except Exception as e:
             print(f"[AgentSDKService] AI 执行失败: {e}")
+            latency_ms = (time.time() - start_time) * 1000
+            if agent_id:
+                _record_execution_background(
+                    agent_id=agent_id,
+                    execution_type="skill",
+                    status="failed",
+                    latency_ms=latency_ms,
+                    error_message=str(e)
+                )
             return {"success": False, "error": str(e), "output": None, "result": None}
 
     async def execute_temp_skill(

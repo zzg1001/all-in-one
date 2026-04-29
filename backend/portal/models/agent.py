@@ -46,6 +46,12 @@ class Agent(Base):
     version = Column(String(20), nullable=True, default="1.0.0")
     usage_count = Column(Integer, nullable=False, default=0)
 
+    # 数据权限配置
+    # accessible_agent_ids: 可访问的其他 Agent ID 列表
+    # 特殊值 ["*"] 表示可访问所有 Agent 的数据
+    # 自己的数据始终可访问（不需要配置）
+    accessible_agent_ids = Column(JSON, nullable=True, default=list)
+
     # 时间戳
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

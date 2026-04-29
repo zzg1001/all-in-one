@@ -292,10 +292,138 @@ export const ccswitchApi = {
   }),
 }
 
+// ============ Feedback API ============
+
+export interface Feedback {
+  id: string
+  user_id: string
+  session_id: string | null
+  agent_id: string | null
+  agent_name: string | null
+  feedback_type: string
+  title: string
+  description: string | null
+  status: string
+  admin_notes: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface FeedbackListResponse {
+  items: Feedback[]
+  total: number
+}
+
+export interface FeedbackUpdate {
+  status?: 'pending' | 'processing' | 'resolved' | 'closed'
+  admin_notes?: string
+}
+
+export const feedbackApi = {
+  // 获取反馈列表
+  getAll: (params?: { status?: string; feedback_type?: string; keyword?: string; page?: number; page_size?: number }) => {
+    const searchParams = new URLSearchParams()
+    if (params?.status) searchParams.append('status', params.status)
+    if (params?.feedback_type) searchParams.append('feedback_type', params.feedback_type)
+    if (params?.keyword) searchParams.append('keyword', params.keyword)
+    if (params?.page) searchParams.append('page', params.page.toString())
+    if (params?.page_size) searchParams.append('page_size', params.page_size.toString())
+    const query = searchParams.toString()
+    return request<FeedbackListResponse>(`/feedback${query ? `?${query}` : ''}`)
+  },
+
+  // 获取反馈详情
+  getById: (id: string) => request<Feedback>(`/feedback/${id}`),
+
+  // 更新反馈
+  update: (id: string, data: FeedbackUpdate) =>
+    request<Feedback>(`/feedback/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  // 删除反馈
+  delete: (id: string) =>
+    request<void>(`/feedback/${id}`, { method: 'DELETE' }),
+}
+
+// ============ Agents API ============
+
+export interface Agent {
+  id: string
+  name: string
+  description: string
+  icon: string
+  category: string
+  system_prompt: string
+  model: string
+  temperature: number
+  max_tokens: number
+  tools: string[]
+  skills: string[]
+  accessible_agent_ids: string[]  // 可访问的其他 Agent 数据
+  status: string
+  author: string
+  version: string
+  usage_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface AgentListResponse {
+  agents: Agent[]
+  total: number
+}
+
+export interface AgentUpdate {
+  name?: string
+  description?: string
+  icon?: string
+  category?: string
+  system_prompt?: string
+  model?: string
+  temperature?: number
+  max_tokens?: number
+  tools?: string[]
+  skills?: string[]
+  accessible_agent_ids?: string[]
+  status?: string
+}
+
+export const agentsApi = {
+  // 获取 Agent 列表
+  getAll: (params?: { category?: string; status?: string; search?: string }) => {
+    const searchParams = new URLSearchParams()
+    if (params?.category) searchParams.append('category', params.category)
+    if (params?.status) searchParams.append('status', params.status)
+    if (params?.search) searchParams.append('search', params.search)
+    const query = searchParams.toString()
+    return request<AgentListResponse>(`/agents${query ? `?${query}` : ''}`)
+  },
+
+  // 获取单个 Agent
+  getById: (id: string) => request<Agent>(`/agents/${id}`),
+
+  // 更新 Agent
+  update: (id: string, data: AgentUpdate) =>
+    request<Agent>(`/agents/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  // 删除 Agent
+  delete: (id: string) =>
+    request<{ status: string; message: string }>(`/agents/${id}`, {
+      method: 'DELETE',
+    }),
+}
+
 // Export all APIs
 export default {
   dashboard: dashboardApi,
   users: usersApi,
   logs: logsApi,
   auth: authApi,
+  feedback: feedbackApi,
+  agents: agentsApi,
 }

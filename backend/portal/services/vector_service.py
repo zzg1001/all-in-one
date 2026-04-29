@@ -320,17 +320,21 @@ class VectorService:
         self,
         query: str,
         agent_id: Optional[str] = None,
+        agent_ids: Optional[List[str]] = None,
+        access_all: bool = False,
         user_id: Optional[str] = None,
         top_k: int = 5,
         threshold: float = 0.7
     ) -> List[Dict[str, Any]]:
         """
-        向量相似度搜索
+        向量相似度搜索（基于 Agent 权限）
 
         Args:
             query: 查询文本
-            agent_id: Agent ID（用于数据隔离）
-            user_id: 用户ID
+            agent_id: 当前 Agent ID（兼容旧接口）
+            agent_ids: 可访问的 Agent ID 列表
+            access_all: 是否可访问所有数据
+            user_id: 用户ID（可选）
             top_k: 返回结果数量
             threshold: 相似度阈值
 
@@ -339,24 +343,27 @@ class VectorService:
         """
         # 获取查询向量
         query_embedding = self._get_embedding(query)
-        print(f"[VectorService] search: query={query[:50]}..., agent_id={agent_id}, user_id={user_id}, top_k={top_k}, threshold={threshold}")
+        print(f"[VectorService] search: query={query[:50]}..., agent_ids={agent_ids}, access_all={access_all}, top_k={top_k}")
 
         with self._get_connection() as conn:
             with conn.cursor() as cur:
                 # 构建查询条件
-                # 注意：agent_id 和 user_id 都是可选的，只有提供时才过滤
                 conditions = []
                 params = []
 
-                if agent_id:
+                # 基于 Agent 权限过滤
+                if access_all:
+                    # 可访问所有数据，不过滤
+                    pass
+                elif agent_ids:
+                    # 只能访问指定的 agent 数据
+                    placeholders = ','.join(['%s'] * len(agent_ids))
+                    conditions.append(f"agent_id IN ({placeholders})")
+                    params.extend(agent_ids)
+                elif agent_id:
+                    # 兼容旧接口：单个 agent_id
                     conditions.append("agent_id = %s")
                     params.append(agent_id)
-
-                # user_id 改为可选过滤（不强制要求匹配）
-                # 如果需要严格的用户隔离，可以取消下面的注释
-                # if user_id:
-                #     conditions.append("user_id = %s")
-                #     params.append(user_id)
 
                 where_clause = " AND ".join(conditions) if conditions else "1=1"
                 print(f"[VectorService] search: WHERE {where_clause}, params={params}")
@@ -394,6 +401,36 @@ class VectorService:
 
         return results
 
+    def _get_agent_accessible_ids(self, agent_id: str) -> tuple:
+        """获取 Agent 可访问的 agent_id 列表（同步方法）"""
+        if not agent_id:
+            return [], False
+
+        from app.core.database import SessionLocal
+        from portal.models.agent import Agent
+
+        db = SessionLocal()
+        try:
+            agent = db.query(Agent).filter(Agent.id == agent_id).first()
+            if not agent:
+                return [agent_id], False
+
+            # 自己的数据始终可访问
+            accessible = [agent_id]
+            extra_ids = agent.accessible_agent_ids or []
+
+            # 特殊值 "*" 表示可访问所有
+            if "*" in extra_ids:
+                return [], True
+
+            for aid in extra_ids:
+                if aid and aid not in accessible:
+                    accessible.append(aid)
+
+            return accessible, False
+        finally:
+            db.close()
+
     async def get_context_for_chat(
         self,
         query: str,
@@ -402,7 +439,7 @@ class VectorService:
         max_context_length: int = 4000
     ) -> str:
         """
-        获取对话的 RAG 上下文
+        获取对话的 RAG 上下文（基于 Agent 权限）
 
         Args:
             query: 用户查询
@@ -413,16 +450,18 @@ class VectorService:
         Returns:
             格式化的上下文文本
         """
+        # 获取 Agent 的数据访问权限
+        agent_ids, access_all = self._get_agent_accessible_ids(agent_id)
+
         # 使用较低的阈值，因为当前使用的是简单哈希向量（非语义向量）
-        # 真正部署时应使用真正的 embedding 模型（如 OpenAI、Claude 或本地模型）
         results = await self.search(
             query=query,
-            agent_id=agent_id,
-            user_id=user_id,
-            top_k=20,  # 返回更多结果
-            threshold=0.0  # 暂时不过滤，返回所有结果
+            agent_ids=agent_ids if not access_all else None,
+            access_all=access_all,
+            top_k=20,
+            threshold=0.0
         )
-        print(f"[VectorService] get_context_for_chat: query={query[:30]}..., agent_id={agent_id}, user_id={user_id}, results={len(results)}")
+        print(f"[VectorService] get_context_for_chat: query={query[:30]}..., agent_ids={agent_ids}, access_all={access_all}, results={len(results)}")
 
         if not results:
             return ""

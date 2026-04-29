@@ -1521,6 +1521,7 @@ export interface Agent {
   skills: string[]
   memory: MemoryConfig
   reasoning: ReasoningConfig
+  accessible_agent_ids: string[]  // 可访问的其他 Agent 数据，["*"] 表示全部
   status: string
   author: string
   version: string
@@ -1542,10 +1543,12 @@ export interface AgentCreate {
   skills?: string[]
   memory?: Partial<MemoryConfig>
   reasoning?: Partial<ReasoningConfig>
+  accessible_agent_ids?: string[]  // 可访问的其他 Agent 数据
 }
 
 export interface AgentUpdate extends Partial<AgentCreate> {
   status?: string
+  accessible_agent_ids?: string[]
 }
 
 export interface AgentListResponse {
@@ -1957,6 +1960,48 @@ export const authApi = {
   getRoles: () => request<string[]>('/users/roles'),
 }
 
+// ============ Feedback API ============
+
+export interface Feedback {
+  id: string
+  user_id: string
+  session_id: string | null
+  agent_id: string | null
+  agent_name: string | null
+  feedback_type: string
+  title: string
+  description: string | null
+  status: string
+  admin_notes: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface FeedbackCreate {
+  feedback_type: 'bug' | 'suggestion' | 'other'
+  title: string
+  description?: string
+  session_id?: string
+  agent_id?: string
+  agent_name?: string
+}
+
+export const feedbackApi = {
+  // 提交反馈
+  submit: (data: FeedbackCreate) =>
+    request<Feedback>('/feedback', {
+      method: 'POST',
+      headers: { 'X-User-ID': getUserId() },
+      body: JSON.stringify(data),
+    }),
+
+  // 获取我的反馈列表
+  getMyFeedbacks: () =>
+    request<Feedback[]>('/feedback/my', {
+      headers: { 'X-User-ID': getUserId() }
+    }),
+}
+
 // Export all APIs
 export default {
   skills: skillsApi,
@@ -1968,6 +2013,7 @@ export default {
   dataNotes: dataNotesApi,
   chatSessions: chatSessionsApi,
   modules: modulesApi,
+  feedback: feedbackApi,
   // Admin APIs
   dashboard: dashboardApi,
   models: modelsApi,

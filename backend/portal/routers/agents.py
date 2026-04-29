@@ -42,6 +42,8 @@ class AgentBase(BaseModel):
     skills: List[str] = Field(default_factory=list, description="启用的技能")
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     reasoning: ReasoningConfig = Field(default_factory=ReasoningConfig)
+    # 数据权限：可访问的其他 Agent ID 列表，["*"] 表示可访问所有数据
+    accessible_agent_ids: List[str] = Field(default_factory=list, description="可访问的其他 Agent 数据")
 
 
 class AgentCreate(AgentBase):
@@ -62,6 +64,7 @@ class AgentUpdate(BaseModel):
     memory: Optional[MemoryConfig] = None
     reasoning: Optional[ReasoningConfig] = None
     status: Optional[str] = None
+    accessible_agent_ids: Optional[List[str]] = None
 
 
 class Agent(AgentBase):
@@ -102,6 +105,7 @@ def _db_to_response(db_agent: AgentModel) -> Agent:
         skills=db_agent.skills or [],
         memory=MemoryConfig(**(module_configs.get("memory", {}))),
         reasoning=ReasoningConfig(**(module_configs.get("reasoning", {}))),
+        accessible_agent_ids=db_agent.accessible_agent_ids or [],
         status=db_agent.status,
         author=db_agent.author or "User",
         version=db_agent.version or "1.0.0",
@@ -352,6 +356,7 @@ async def create_agent(data: AgentCreate, db: Session = Depends(get_db)):
             "memory": data.memory.model_dump(),
             "reasoning": data.reasoning.model_dump(),
         },
+        accessible_agent_ids=data.accessible_agent_ids,
         status="draft",
         author="User",
         version="1.0.0",

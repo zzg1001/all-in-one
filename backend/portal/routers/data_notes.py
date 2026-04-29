@@ -115,6 +115,44 @@ UPLOADS_DIR = get_uploads_dir()
 FILE_MANAGE_DIR = get_file_manage_dir()  # File Manage 独立目录
 
 
+def get_accessible_agent_ids(db: Session, agent_id: str) -> Tuple[List[str], bool]:
+    """
+    获取 Agent 可访问的所有 agent_id 列表
+
+    Args:
+        db: 数据库会话
+        agent_id: 当前 Agent ID
+
+    Returns:
+        (agent_ids, access_all): agent_ids 是可访问的ID列表，access_all 表示是否可访问所有数据
+    """
+    from portal.models.agent import Agent
+
+    if not agent_id:
+        return [], False
+
+    agent = db.query(Agent).filter(Agent.id == agent_id).first()
+    if not agent:
+        return [agent_id], False  # Agent不存在，只能访问自己的
+
+    # 自己的数据始终可访问
+    accessible = [agent_id]
+
+    # 检查额外权限
+    extra_ids = agent.accessible_agent_ids or []
+
+    # 特殊值 "*" 表示可访问所有
+    if "*" in extra_ids:
+        return [], True  # access_all = True
+
+    # 添加额外授权的 agent_ids
+    for aid in extra_ids:
+        if aid and aid not in accessible:
+            accessible.append(aid)
+
+    return accessible, False
+
+
 def get_user_id(x_user_id: Optional[str] = Header(None)) -> str:
     """获取用户ID
 
@@ -184,22 +222,33 @@ async def get_data_notes(
     user_id: str = Depends(get_user_id),
     db: Session = Depends(get_db)
 ):
-    """获取当前用户的数据便签
+    """获取数据便签（基于 Agent 权限）
+
+    数据权限规则：
+    - Agent 自己的数据始终可访问
+    - 如果 Agent 配置了 accessible_agent_ids，还可访问其他 Agent 的数据
+    - 如果 accessible_agent_ids 包含 "*"，可访问所有数据
 
     Args:
         q: 搜索关键词（搜索名称和描述）
         favorited_only: 只返回收藏的便签
         parent_id: 父文件夹ID，不传则获取根目录，传 'all' 获取全部
-        agent_id: Agent ID，只返回该 Agent 关联的便签
+        agent_id: 当前 Agent ID（用于确定数据权限）
     """
     query = db.query(DataNote).filter(
-        DataNote.user_id == user_id,
         DataNote.deleted_at.is_(None)  # 排除软删除的记录
     )
 
-    # 按 Agent 过滤
+    # 基于 Agent 权限过滤数据
     if agent_id:
-        query = query.filter(DataNote.agent_id == agent_id)
+        accessible_ids, access_all = get_accessible_agent_ids(db, agent_id)
+        if not access_all:
+            # 只能访问指定的 agent 数据
+            query = query.filter(DataNote.agent_id.in_(accessible_ids))
+        # access_all = True 时不过滤，可访问所有数据
+    else:
+        # 没有 agent_id 时，返回空（或者可以返回所有无 agent_id 的数据）
+        query = query.filter(DataNote.agent_id.is_(None))
 
     if favorited_only:
         query = query.filter(DataNote.is_favorited == True)
@@ -246,8 +295,8 @@ async def get_data_notes(
         }
         if note.file_type == 'folder':
             count = db.query(sql_func.count(DataNote.id)).filter(
-                DataNote.user_id == user_id,
-                DataNote.parent_id == note.id
+                DataNote.parent_id == note.id,
+                DataNote.deleted_at.is_(None)
             ).scalar()
             note_dict["item_count"] = count
         result.append(DataNoteResponse(**note_dict))
@@ -817,22 +866,27 @@ class VectorSearchResult(BaseModel):
 @router.post("/data-notes/search", response_model=List[VectorSearchResult])
 async def vector_search(
     request: VectorSearchRequest,
-    user_id: str = Depends(get_user_id)
+    user_id: str = Depends(get_user_id),
+    db: Session = Depends(get_db)
 ):
     """
-    向量相似度搜索
+    向量相似度搜索（基于 Agent 权限）
 
-    从用户的文件中搜索与查询相关的内容片段。
-    数据按 agent_id 隔离。
+    从 Agent 可访问的文件中搜索与查询相关的内容片段。
     """
     try:
         vector_service = get_vector_service()
         if not vector_service:
             raise HTTPException(status_code=503, detail="向量搜索服务未初始化")
+
+        # 获取可访问的 agent_ids
+        accessible_ids, access_all = get_accessible_agent_ids(db, request.agent_id)
+
         results = await vector_service.search(
             query=request.query,
             agent_id=request.agent_id,
-            user_id=user_id,
+            agent_ids=accessible_ids if not access_all else None,  # None 表示不过滤
+            access_all=access_all,
             top_k=request.top_k
         )
         return results
