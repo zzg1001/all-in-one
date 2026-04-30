@@ -148,11 +148,8 @@ async def create_skill(skill_data: SkillCreate, db: Session = Depends(get_db)):
     config_path = skill_folder / "config.json"
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    # 同步到 MinIO（双写）
-    from portal.services.storage.utils import sync_skill_folder_to_minio
-    await sync_skill_folder_to_minio(skill_folder, skill_id)
-
     # 新建技能，group_id = id（首个版本）
+    # 创建只保存本地，同步到 MinIO 需要手动操作
     skill = Skill(
         id=skill_id,
         group_id=skill_id,  # 首个版本，group_id 等于 id
@@ -167,7 +164,8 @@ async def create_skill(skill_data: SkillCreate, db: Session = Depends(get_db)):
         status="active",
         interactions=([i.model_dump() for i in skill_data.interactions]
                      if skill_data.interactions else []),
-        output_config=output_config_dict  # 输出配置
+        output_config=output_config_dict,  # 输出配置
+        minio_synced=False  # 创建时不同步，需要手动同步
         # original_created_at 会自动设置为当前时间
     )
 
@@ -354,13 +352,9 @@ async def upload_skill(
     """
     上传技能文件夹（ZIP 压缩包）
 
-    文件夹结构示例：
-    ```
-    my-skill/
-    ├── main.py          # 入口脚本
-    ├── requirements.txt # 依赖（可选）
-    └── config.json      # 配置（可选）
-    ```
+    1. 先解析 ZIP 包中的 config.json 获取描述等信息
+    2. 本地上传成功即返回
+    3. 异步尝试同步到 MinIO，失败不影响上传结果
     """
     # 验证文件类型
     if not file.filename or not file.filename.endswith('.zip'):
@@ -387,7 +381,6 @@ async def upload_skill(
         # 检查是否有嵌套文件夹（常见的 ZIP 打包方式）
         items = list(temp_folder.iterdir())
         if len(items) == 1 and items[0].is_dir():
-            # 将内容移动到上层
             nested_folder = items[0]
             for item in nested_folder.iterdir():
                 shutil.move(str(item), str(temp_folder / item.name))
@@ -401,18 +394,18 @@ async def upload_skill(
             except json.JSONDecodeError:
                 tags_list = [t.strip() for t in tags.split(",") if t.strip()]
 
-        # 尝试从 config.json 读取额外信息（但不覆盖 author，保持上传标记）
+        # 从 config.json 读取描述等信息
         config_file = temp_folder / "config.json"
         if config_file.exists():
             try:
                 config = json.loads(config_file.read_text(encoding="utf-8"))
-                if not description and "description" in config:
+                # 优先使用 ZIP 包中的描述
+                if "description" in config and config["description"]:
                     description = config["description"]
                 if not tags_list and "tags" in config:
                     tags_list = config["tags"]
-                if "icon" in config:
+                if "icon" in config and config["icon"]:
                     icon = config["icon"]
-                # 注意：不从 config.json 读取 author，保持上传的 skill 标记为 'uploaded'
                 if "version" in config:
                     version = config["version"]
                 if "entry_script" in config:
@@ -420,48 +413,45 @@ async def upload_skill(
             except Exception:
                 pass
 
-        # 2. 先写 MinIO（主存储），失败则报错
-        from portal.services.storage.utils import is_minio_storage, get_storage_backend
-        import mimetypes
-        if is_minio_storage("skills"):
-            try:
-                storage = get_storage_backend("skills")
-                for file_path in temp_folder.rglob("*"):
-                    if file_path.is_file():
-                        rel_path = file_path.relative_to(temp_folder)
-                        minio_path = f"{skill_id}/{rel_path}"
-                        file_content = file_path.read_bytes()
-                        content_type, _ = mimetypes.guess_type(str(file_path))
-                        await storage.write_file(minio_path, file_content, content_type)
-                print(f"[Skills] MinIO 写入成功: {skill_id}")
-            except Exception as e:
-                print(f"[Skills] MinIO 上传失败: {e}")
-                raise HTTPException(status_code=500, detail=f"文件上传失败: {e}")
+        # 如果还没有描述，尝试从 README.md 或 SKILL.md 中读取
+        if not description:
+            for readme_name in ["README.md", "readme.md", "SKILL.md"]:
+                readme_file = temp_folder / readme_name
+                if readme_file.exists():
+                    try:
+                        readme_content = readme_file.read_text(encoding="utf-8")
+                        # 提取第一段作为描述
+                        lines = [l.strip() for l in readme_content.split('\n') if l.strip() and not l.startswith('#')]
+                        if lines:
+                            description = lines[0][:200]  # 最多 200 字符
+                            break
+                    except Exception:
+                        pass
 
-        # 3. 再写本地（缓存），失败不影响
+        # 2. 先写本地（必须成功）
         try:
             shutil.copytree(temp_folder, skill_folder)
             print(f"[Skills] 本地写入成功: {skill_folder}")
         except Exception as e:
-            print(f"[Skills] 本地写入失败（不影响上传）: {e}")
+            raise HTTPException(status_code=500, detail=f"本地保存失败: {e}")
 
         # 清理临时目录
         shutil.rmtree(temp_folder, ignore_errors=True)
 
-        # 创建数据库记录 - 上传的 skill 强制 author='uploaded'
+        # 创建数据库记录（上传只保存本地，同步到 MinIO 需要手动操作）
         skill = Skill(
             id=skill_id,
-            group_id=skill_id,  # 首个版本，group_id 等于 id
+            group_id=skill_id,
             name=name,
             description=description,
             icon=icon,
             tags=tags_list,
-            folder_path=skill_id,  # 相对路径就是 ID
+            folder_path=skill_id,
             entry_script=entry_script,
-            author='uploaded',  # 强制标记为上传，确保不可编辑
+            author='uploaded',
             version=version,
-            status="active"
-            # original_created_at 会自动设置为当前时间
+            status="active",
+            minio_synced=False  # 上传时不同步，需要手动同步
         )
 
         db.add(skill)
@@ -471,11 +461,9 @@ async def upload_skill(
         return skill
 
     except HTTPException:
-        # 清理临时目录
         shutil.rmtree(temp_folder, ignore_errors=True)
         raise
     except Exception as e:
-        # 清理失败的上传
         shutil.rmtree(temp_folder, ignore_errors=True)
         shutil.rmtree(skill_folder, ignore_errors=True)
         raise HTTPException(status_code=500, detail=f"上传失败: {str(e)}")
@@ -809,12 +797,17 @@ async def push_skill_to_remote(skill_id: str, db: Session = Depends(get_db)):
 
     uploaded_count = await sync_skill_folder_to_minio(skill_folder, skill.folder_path)
 
+    # 更新同步状态
+    skill.minio_synced = True
+    db.commit()
+
     return {
         "success": True,
         "message": f"推送完成，共上传 {uploaded_count} 个文件",
         "skill_id": skill_id,
         "skill_name": skill.name,
-        "uploaded_files": uploaded_count
+        "uploaded_files": uploaded_count,
+        "minio_synced": True
     }
 
 
@@ -950,6 +943,46 @@ async def get_skill_file_content(
         return {"content": content}
     except UnicodeDecodeError:
         return {"content": None, "binary": True, "size": file_full_path.stat().st_size}
+
+
+@router.get("/{skill_id}/download")
+async def download_skill(skill_id: str, db: Session = Depends(get_db)):
+    """
+    下载技能为 ZIP 压缩包
+    """
+    from fastapi.responses import StreamingResponse
+    import io
+
+    skill = db.query(Skill).filter(Skill.id == skill_id).first()
+    if not skill:
+        raise HTTPException(status_code=404, detail="技能不存在")
+
+    if not skill.folder_path:
+        raise HTTPException(status_code=404, detail="技能没有文件夹")
+
+    skill_folder = SKILLS_STORAGE_DIR / skill.folder_path
+    if not skill_folder.exists():
+        raise HTTPException(status_code=404, detail="技能文件夹不存在")
+
+    # 创建内存中的 ZIP 文件
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        for file_path in skill_folder.rglob("*"):
+            if file_path.is_file():
+                rel_path = file_path.relative_to(skill_folder)
+                zip_file.write(file_path, rel_path)
+
+    zip_buffer.seek(0)
+
+    # 生成文件名
+    safe_name = skill.name.replace(" ", "_").replace("/", "_")
+    filename = f"{safe_name}_v{skill.version}.zip"
+
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
 
 
 # ============ 代码格式转换 ============

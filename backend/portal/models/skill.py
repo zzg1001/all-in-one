@@ -29,5 +29,7 @@ class Skill(Base):
     original_created_at = Column(DateTime, server_default=func.now())  # 原始创建时间（用于排序）
     created_at = Column(DateTime, server_default=func.now())  # 本版本创建时间
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    # MinIO 同步状态
+    minio_synced = Column(Boolean, nullable=False, default=False)  # 是否已同步到 MinIO
     # 软删除
     deleted_at = Column(DateTime, nullable=True, index=True)  # 软删除时间戳，NULL 表示未删除

@@ -68,8 +68,10 @@ async def lifespan(app: FastAPI):
     from portal.services.storage_sync_service import sync_all_on_startup
     await sync_all_on_startup()
 
-    # 启动清理调度器
-    from portal.services.cleanup_service import start_cleanup_scheduler, stop_cleanup_scheduler
+    # 启动时先执行一次清理，然后启动定时调度器
+    from portal.services.cleanup_service import start_cleanup_scheduler, stop_cleanup_scheduler, run_cleanup
+    logger.info("执行启动清理...")
+    await run_cleanup()
     await start_cleanup_scheduler()
 
     yield

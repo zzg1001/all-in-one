@@ -76,6 +76,7 @@ class SkillResponse(BaseModel):
     status: str = "active"  # active/deprecated
     interactions: Optional[List[SkillInteraction]] = None
     output_config: Optional[OutputConfig] = None  # 输出配置
+    minio_synced: bool = False  # 是否已同步到 MinIO
     original_created_at: Optional[datetime] = None  # 原始创建时间
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

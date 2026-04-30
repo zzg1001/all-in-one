@@ -68,6 +68,18 @@ const router = createRouter({
       name: 'agents',
       component: () => import('@/views/agents/AgentsView.vue'),
       meta: { title: 'Agent 数据权限', requiresAuth: true }
+    },
+    {
+      path: '/agent-manage',
+      name: 'agent-manage',
+      component: () => import('@/views/agents/AgentManageView.vue'),
+      meta: { title: 'Agent 管理', requiresAuth: true }
+    },
+    {
+      path: '/skills',
+      name: 'skills',
+      component: () => import('@/views/skills/SkillsManageView.vue'),
+      meta: { title: '技能管理', requiresAuth: true }
     }
   ]
 })

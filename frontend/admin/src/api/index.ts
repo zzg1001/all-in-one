@@ -418,6 +418,13 @@ export const agentsApi = {
   // 获取单个 Agent
   getById: (id: string) => request<Agent>(`/agents/${id}`),
 
+  // 创建 Agent
+  create: (data: AgentUpdate) =>
+    request<Agent>('/agents', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
   // 更新 Agent
   update: (id: string, data: AgentUpdate) =>
     request<Agent>(`/agents/${id}`, {
@@ -430,6 +437,145 @@ export const agentsApi = {
     request<{ status: string; message: string }>(`/agents/${id}`, {
       method: 'DELETE',
     }),
+}
+
+// ============ Skills API ============
+
+export interface Skill {
+  id: string
+  group_id: string
+  name: string
+  description: string
+  icon: string
+  tags: string[]
+  folder_path: string
+  entry_script: string
+  author: string
+  version: string
+  status: string
+  minio_synced: boolean  // 是否已同步到 MinIO
+  created_at: string
+  updated_at: string
+}
+
+export interface SkillCreate {
+  name: string
+  description?: string
+  icon?: string
+  tags?: string[]
+  entry_script?: string
+  code?: string
+}
+
+export interface SkillPreview {
+  name: string
+  description: string
+  icon: string
+  tags: string[]
+  author: string
+  version: string
+  entry_script: string
+  files: string[]
+  ai_analysis?: {
+    description?: string
+    capabilities?: string[]
+    tags?: string[]
+    icon?: string
+  }
+}
+
+export const skillsApi = {
+  // 获取技能列表
+  getAll: () => request<Skill[]>('/skills'),
+
+  // 获取单个技能
+  getById: (id: string) => request<Skill>(`/skills/${id}`),
+
+  // 创建技能
+  create: (data: SkillCreate) => request<Skill>('/skills', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+
+  // 预览上传的 ZIP 包内容
+  preview: async (file: File): Promise<SkillPreview> => {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const token = localStorage.getItem('auth_token')
+    const response = await fetch(`${config.apiBaseUrl}/skills/upload/preview`, {
+      method: 'POST',
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+      body: formData,
+    })
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: '解析失败' }))
+      throw new Error(error.detail || '解析失败')
+    }
+
+    return response.json()
+  },
+
+  // 上传技能 ZIP
+  upload: async (file: File, data: { name: string; description?: string; icon?: string; tags?: string; version?: string; entry_script?: string }) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('name', data.name)
+    if (data.description) formData.append('description', data.description)
+    if (data.icon) formData.append('icon', data.icon)
+    if (data.tags) formData.append('tags', data.tags)
+    if (data.version) formData.append('version', data.version)
+    if (data.entry_script) formData.append('entry_script', data.entry_script)
+
+    const token = localStorage.getItem('auth_token')
+    const response = await fetch(`${config.apiBaseUrl}/skills/upload`, {
+      method: 'POST',
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+      body: formData,
+    })
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: '上传失败' }))
+      throw new Error(error.detail || '上传失败')
+    }
+
+    return response.json()
+  },
+
+  // 下载技能
+  download: (id: string, filename: string) => {
+    const token = localStorage.getItem('auth_token')
+    const url = `${config.apiBaseUrl}/skills/${id}/download`
+
+    // 使用隐藏的 a 标签触发下载
+    fetch(url, {
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+    })
+      .then(res => res.blob())
+      .then(blob => {
+        const a = document.createElement('a')
+        a.href = URL.createObjectURL(blob)
+        a.download = filename
+        a.click()
+        URL.revokeObjectURL(a.href)
+      })
+  },
+
+  // 删除技能
+  delete: (id: string) => request<void>(`/skills/${id}`, { method: 'DELETE' }),
+
+  // 推送到 MinIO
+  push: (id: string) => request<any>(`/skills/${id}/push`, { method: 'POST' }),
+
+  // 推送全部
+  pushAll: () => request<any>('/skills/push-all', { method: 'POST' }),
+
+  // 从 MinIO 同步
+  sync: (id: string) => request<any>(`/skills/${id}/sync`, { method: 'POST' }),
+
+  // 同步全部
+  syncAll: () => request<any>('/skills/sync-all', { method: 'POST' }),
 }
 
 // Export all APIs

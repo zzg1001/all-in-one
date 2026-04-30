@@ -32,6 +32,12 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/agent-studio',
+      name: 'agent-studio',
+      component: () => import('../views/AgentStudioView.vue'),
+      meta: { title: 'Agent 工作室', requiresAuth: false },
+    },
+    {
       path: '/monitor',
       name: 'monitor',
       component: () => import('../views/MonitorView.vue'),
