@@ -751,9 +751,9 @@ async def delete_skill(skill_id: str, db: Session = Depends(get_db)):
 @router.post("/{skill_id}/sync")
 async def sync_skill_from_remote(skill_id: str, db: Session = Depends(get_db)):
     """
-    从 MinIO 同步技能文件到本地（强制覆盖）
+    从 MinIO 同步技能文件到本地（拉取）
 
-    用于更新技能代码后，手动触发远程同步
+    用于从远程获取最新的技能文件
     """
     from portal.services.storage_sync_service import sync_skill_from_minio
 
@@ -781,12 +781,49 @@ async def sync_skill_from_remote(skill_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=result["message"])
 
 
+@router.post("/{skill_id}/push")
+async def push_skill_to_remote(skill_id: str, db: Session = Depends(get_db)):
+    """
+    将本地技能文件推送到 MinIO（推送）
+
+    用于本地修改技能代码后，推送到远程供其他节点同步
+    """
+    from portal.services.storage.utils import sync_skill_folder_to_minio, is_minio_storage
+
+    if not is_minio_storage("skills"):
+        raise HTTPException(status_code=400, detail="Skills 未配置 MinIO 存储，无法推送")
+
+    skill = db.query(Skill).filter(
+        Skill.id == skill_id,
+        Skill.deleted_at.is_(None)
+    ).first()
+    if not skill:
+        raise HTTPException(status_code=404, detail="技能不存在")
+
+    if not skill.folder_path:
+        raise HTTPException(status_code=400, detail="技能没有配置文件夹")
+
+    skill_folder = SKILLS_STORAGE_DIR / skill.folder_path
+    if not skill_folder.exists():
+        raise HTTPException(status_code=404, detail=f"本地技能文件夹不存在: {skill_folder}")
+
+    uploaded_count = await sync_skill_folder_to_minio(skill_folder, skill.folder_path)
+
+    return {
+        "success": True,
+        "message": f"推送完成，共上传 {uploaded_count} 个文件",
+        "skill_id": skill_id,
+        "skill_name": skill.name,
+        "uploaded_files": uploaded_count
+    }
+
+
 @router.post("/sync-all")
 async def sync_all_skills_from_remote(db: Session = Depends(get_db)):
     """
-    从 MinIO 同步所有技能文件到本地（强制覆盖）
+    从 MinIO 同步所有技能文件到本地（拉取）
 
-    用于批量更新技能代码后，手动触发远程同步
+    用于从远程获取所有最新的技能文件
     """
     from portal.services.storage_sync_service import sync_skills_from_minio
 
@@ -807,6 +844,53 @@ async def sync_all_skills_from_remote(db: Session = Depends(get_db)):
         "message": f"同步完成，共同步 {result['total_synced']} 个文件",
         "total_synced": result["total_synced"],
         "skills_count": len(skills)
+    }
+
+
+@router.post("/push-all")
+async def push_all_skills_to_remote(db: Session = Depends(get_db)):
+    """
+    将所有本地技能文件推送到 MinIO（推送）
+
+    用于本地批量修改技能代码后，推送到远程供其他节点同步
+    """
+    from portal.services.storage.utils import sync_skill_folder_to_minio, is_minio_storage
+
+    if not is_minio_storage("skills"):
+        raise HTTPException(status_code=400, detail="Skills 未配置 MinIO 存储，无法推送")
+
+    # 获取所有活跃的技能
+    skills = db.query(Skill).filter(
+        Skill.deleted_at.is_(None),
+        Skill.folder_path.isnot(None)
+    ).all()
+
+    if not skills:
+        return {"success": True, "message": "没有需要推送的技能", "total_uploaded": 0}
+
+    total_uploaded = 0
+    success_count = 0
+    failed_skills = []
+
+    for skill in skills:
+        skill_folder = SKILLS_STORAGE_DIR / skill.folder_path
+        if skill_folder.exists():
+            try:
+                count = await sync_skill_folder_to_minio(skill_folder, skill.folder_path)
+                total_uploaded += count
+                success_count += 1
+            except Exception as e:
+                failed_skills.append({"id": skill.id, "name": skill.name, "error": str(e)})
+        else:
+            failed_skills.append({"id": skill.id, "name": skill.name, "error": "本地文件夹不存在"})
+
+    return {
+        "success": True,
+        "message": f"推送完成，{success_count}/{len(skills)} 个技能成功，共上传 {total_uploaded} 个文件",
+        "total_uploaded": total_uploaded,
+        "success_count": success_count,
+        "skills_count": len(skills),
+        "failed": failed_skills if failed_skills else None
     }
 
 
