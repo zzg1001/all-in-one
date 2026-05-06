@@ -2,6 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import config from '@/config'
 
 const route = useRoute()
 const router = useRouter()
@@ -65,10 +66,10 @@ const isActive = (path: string) => {
     <!-- 侧边栏 -->
     <aside class="admin-sidebar" :class="{ collapsed: sidebarCollapsed }">
       <div class="sidebar-header">
-        <div class="logo">
+        <a :href="config.portalUrl" class="logo" title="返回首页">
           <div class="logo-icon">IK</div>
           <span v-if="!sidebarCollapsed" class="logo-text">Admin</span>
-        </div>
+        </a>
         <button class="collapse-btn" @click="toggleSidebar" :title="sidebarCollapsed ? '展开' : '收起'">
           <svg viewBox="0 0 20 20" fill="currentColor" :class="{ rotated: sidebarCollapsed }">
             <path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd"/>
@@ -217,6 +218,7 @@ const isActive = (path: string) => {
   align-items: center;
   gap: 10px;
   text-decoration: none;
+  cursor: pointer;
 }
 
 .logo-icon {

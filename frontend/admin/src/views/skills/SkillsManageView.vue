@@ -15,7 +15,6 @@ const searchQuery = ref('')
 
 // 多选
 const selectedIds = ref<Set<string>>(new Set())
-const isSelectMode = ref(false)
 
 // 上传弹窗
 const showUploadModal = ref(false)
@@ -51,11 +50,6 @@ const stats = computed(() => ({
   selected: selectedIds.value.size
 }))
 
-// 是否全选
-const isAllSelected = computed(() =>
-  filteredSkills.value.length > 0 && filteredSkills.value.every(s => selectedIds.value.has(s.id))
-)
-
 // 加载数据
 const loadSkills = async () => {
   loading.value = true
@@ -68,29 +62,12 @@ const loadSkills = async () => {
   }
 }
 
-// 切换选择模式
-const toggleSelectMode = () => {
-  isSelectMode.value = !isSelectMode.value
-  if (!isSelectMode.value) {
-    selectedIds.value.clear()
-  }
-}
-
 // 切换选择
 const toggleSelect = (id: string) => {
   if (selectedIds.value.has(id)) {
     selectedIds.value.delete(id)
   } else {
     selectedIds.value.add(id)
-  }
-}
-
-// 全选/取消全选
-const toggleSelectAll = () => {
-  if (isAllSelected.value) {
-    selectedIds.value.clear()
-  } else {
-    filteredSkills.value.forEach(s => selectedIds.value.add(s.id))
   }
 }
 
@@ -399,35 +376,34 @@ onMounted(() => {
   <Toast ref="toast" />
   <ConfirmDialog ref="confirmDialog" />
   <div class="skills-page">
-    <!-- 头部 -->
-    <div class="page-header">
-      <div class="header-left">
-        <h2>技能管理</h2>
-        <span class="skill-count">{{ stats.total }} 个技能</span>
+    <!-- 工具栏 -->
+    <div class="toolbar">
+      <div class="toolbar-stats">
+        <span class="stat-item">
+          <span class="stat-dot"></span>
+          {{ stats.total }} 个技能
+        </span>
       </div>
-      <div class="header-actions">
-        <input v-model="searchQuery" type="text" class="search-input" placeholder="搜索..." />
-        <button class="btn-icon-only" title="从 MinIO 拉取" @click="syncAll">
+      <div class="toolbar-actions">
+        <div class="search-box">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+          </svg>
+          <input v-model="searchQuery" type="text" placeholder="搜索" />
+        </div>
+        <button class="btn-icon" title="从 MinIO 拉取" @click="syncAll">
           <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/></svg>
         </button>
-        <button class="btn-text" :class="{ active: isSelectMode }" @click="toggleSelectMode">
-          {{ isSelectMode ? '取消' : '选择' }}
+        <button class="btn-icon" :disabled="selectedIds.size === 0" title="将选中的技能推送到 MinIO" @click="batchPush">
+          <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clip-rule="evenodd"/></svg>
         </button>
-        <button class="btn-primary" @click="openCreateModal">+ 创建</button>
-      </div>
-    </div>
-
-    <!-- 批量操作栏 -->
-    <div v-if="isSelectMode" class="batch-bar">
-      <label class="select-all">
-        <input type="checkbox" :checked="isAllSelected" @change="toggleSelectAll" />
-        全选
-      </label>
-      <span class="selected-count">已选 {{ stats.selected }} 个</span>
-      <div class="batch-actions">
-        <button class="batch-btn" @click="batchDownload">下载</button>
-        <button class="batch-btn" @click="batchPush">推送</button>
-        <button class="batch-btn danger" @click="batchDelete">删除</button>
+        <span v-if="selectedIds.size > 0" class="selected-badge">{{ selectedIds.size }}</span>
+        <button class="btn-add" @click="openCreateModal">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M12 5v14M5 12h14"/>
+          </svg>
+          创建
+        </button>
       </div>
     </div>
 
@@ -443,13 +419,8 @@ onMounted(() => {
           :key="skill.id"
           class="skill-card"
           :class="{ selected: selectedIds.has(skill.id) }"
-          @click="isSelectMode ? toggleSelect(skill.id) : null"
+          @click="toggleSelect(skill.id)"
         >
-          <!-- 选择框 -->
-          <div v-if="isSelectMode" class="select-checkbox">
-            <input type="checkbox" :checked="selectedIds.has(skill.id)" @click.stop />
-          </div>
-
           <div class="card-main">
             <div class="card-icon">{{ skill.icon || '⚡' }}</div>
             <div class="card-info">
@@ -472,14 +443,11 @@ onMounted(() => {
           </div>
 
           <!-- 悬浮操作 -->
-          <div class="card-actions" v-if="!isSelectMode">
-            <button class="action-btn" title="下载" @click.stop="downloadSkill(skill)">
+          <div class="card-actions">
+            <button class="action-btn" title="下载技能包" @click.stop="downloadSkill(skill)">
               <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
             </button>
-            <button v-if="!skill.minio_synced" class="action-btn sync" title="同步到 MinIO" @click.stop="pushSkill(skill)">
-              <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clip-rule="evenodd"/></svg>
-            </button>
-            <button class="action-btn danger" title="删除" @click.stop="deleteSkill(skill)">
+            <button class="action-btn danger" title="删除技能" @click.stop="deleteSkill(skill)">
               <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
             </button>
           </div>
@@ -635,70 +603,149 @@ onMounted(() => {
 
 <style scoped>
 .skills-page {
-  padding: 20px;
-  background: #f8fafc;
+  height: 100%;
   min-height: 100vh;
+  background: linear-gradient(180deg, #f5f5f7 0%, #e8e8ed 100%);
+  display: flex;
+  flex-direction: column;
 }
 
-.page-header {
+/* 工具栏 - 固定在顶部 */
+.toolbar {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 16px;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 20px;
+  background: white;
+  border-bottom: 1px solid rgba(0,0,0,0.08);
+  position: sticky;
+  top: 0;
+  z-index: 100;
 }
 
-.header-left {
+.toolbar-stats {
   display: flex;
-  align-items: baseline;
-  gap: 12px;
+  gap: 16px;
 }
 
-.header-left h2 {
-  margin: 0;
-  font-size: 20px;
-  color: #1e293b;
+.stat-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: #86868b;
 }
 
-.skill-count {
-  font-size: 13px;
-  color: #94a3b8;
+.stat-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #007aff;
 }
 
-.header-actions {
+.toolbar-actions {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.search-input {
-  width: 140px;
-  padding: 6px 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  font-size: 13px;
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: rgba(0,0,0,0.04);
+  border-radius: 8px;
+  width: 160px;
 }
 
-.btn-icon-only {
+.search-box svg {
+  width: 14px;
+  height: 14px;
+  color: #86868b;
+  flex-shrink: 0;
+}
+
+.search-box input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font-size: 13px;
+  outline: none;
+  color: #1d1d1f;
+}
+
+.search-box input::placeholder {
+  color: #86868b;
+}
+
+.btn-icon {
   width: 32px;
   height: 32px;
-  border: 1px solid #e2e8f0;
-  background: white;
+  border: none;
+  background: rgba(0,0,0,0.04);
   border-radius: 6px;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #64748b;
+  color: #86868b;
+  transition: all 0.15s;
 }
 
-.btn-icon-only:hover {
-  background: #f1f5f9;
-  color: #3b82f6;
+.btn-icon:hover {
+  background: rgba(0,0,0,0.08);
+  color: #007aff;
 }
 
-.btn-icon-only svg {
+.btn-icon svg {
   width: 16px;
   height: 16px;
+}
+
+.btn-add {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  background: #007aff;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-add:hover {
+  background: #0066d6;
+}
+
+.btn-add:active {
+  transform: scale(0.96);
+}
+
+.btn-add svg {
+  width: 12px;
+  height: 12px;
+}
+
+.btn-icon:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.selected-badge {
+  background: #007aff;
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 10px;
+  min-width: 18px;
+  text-align: center;
 }
 
 .btn-text {
@@ -735,66 +782,15 @@ onMounted(() => {
   cursor: not-allowed;
 }
 
-/* 批量操作栏 */
-.batch-bar {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 10px 16px;
-  background: #eff6ff;
-  border-radius: 8px;
-  margin-bottom: 16px;
-}
-
-.select-all {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: #475569;
-  cursor: pointer;
-}
-
-.selected-count {
-  font-size: 13px;
-  color: #3b82f6;
-  font-weight: 500;
-}
-
-.batch-actions {
-  margin-left: auto;
-  display: flex;
-  gap: 8px;
-}
-
-.batch-btn {
-  padding: 5px 12px;
-  background: white;
-  border: 1px solid #e2e8f0;
-  border-radius: 5px;
-  font-size: 12px;
-  cursor: pointer;
-  color: #475569;
-}
-
-.batch-btn:hover {
-  background: #f8fafc;
-}
-
-.batch-btn.danger {
-  color: #ef4444;
-  border-color: #fecaca;
-}
-
-.batch-btn.danger:hover {
-  background: #fef2f2;
-}
-
-/* 技能卡片网格 */
+/* 内容区 - 可滚动 */
 .skills-grid {
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 16px;
+  align-content: start;
 }
 
 .skill-card {
@@ -817,21 +813,9 @@ onMounted(() => {
 }
 
 .skill-card.selected {
-  border-color: #3b82f6;
-  background: linear-gradient(135deg, #eff6ff 0%, #f0f9ff 100%);
-}
-
-.select-checkbox {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: 5;
-}
-
-.select-checkbox input {
-  width: 16px;
-  height: 16px;
-  cursor: pointer;
+  border-color: #007aff;
+  background: linear-gradient(135deg, #e0f2ff 0%, #f0f9ff 100%);
+  box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.2);
 }
 
 /* 卡片主体 */
@@ -1481,32 +1465,23 @@ onMounted(() => {
 }
 
 /* 响应式 */
-@media (max-width: 1400px) {
-  .skills-grid {
-    grid-template-columns: repeat(5, 1fr);
-  }
-}
-
-@media (max-width: 1200px) {
-  .skills-grid {
-    grid-template-columns: repeat(4, 1fr);
-  }
-}
-
-@media (max-width: 900px) {
-  .skills-grid {
-    grid-template-columns: repeat(3, 1fr);
-  }
-}
-
 @media (max-width: 640px) {
   .skills-grid {
     grid-template-columns: repeat(2, 1fr);
     gap: 12px;
+    padding: 12px;
   }
 
   .skill-card {
     min-height: auto;
+  }
+
+  .toolbar {
+    padding: 8px 12px;
+  }
+
+  .search-box {
+    width: 120px;
   }
 }
 </style>

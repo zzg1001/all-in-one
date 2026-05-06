@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import SkillCard from '@/components/skills/SkillCard.vue'
 import AddSkillModal from '@/components/skills/AddSkillModal.vue'
 import AgentChat from '@/components/agent/AgentChat.vue'
@@ -37,6 +37,7 @@ interface Workflow {
 }
 
 const route = useRoute()
+const router = useRouter()
 const activeTab = ref<'skills' | 'agent' | 'workflows' | 'agents' | 'monitor'>('agent')
 
 // 从首页跳转时隐藏侧边栏
@@ -1276,7 +1277,7 @@ onUnmounted(() => {
       <!-- 左侧导航 - 从首页跳转时隐藏 -->
       <nav v-if="!hideSidebar" class="sidebar">
         <div class="sidebar-logo">
-          <div class="logo-icon">
+          <div class="logo-icon" @click="router.push('/')" title="返回首页">
             <svg viewBox="0 0 36 36" fill="none">
               <circle cx="18" cy="18" r="16" fill="url(#logo-grad)" />
               <circle cx="18" cy="18" r="12" fill="rgba(255,255,255,0.15)" />
@@ -2027,6 +2028,7 @@ onUnmounted(() => {
   height: 40px;
   filter: drop-shadow(0 2px 4px rgba(129, 140, 248, 0.3));
   transition: transform 0.2s ease;
+  cursor: pointer;
 }
 
 .logo-icon:hover {

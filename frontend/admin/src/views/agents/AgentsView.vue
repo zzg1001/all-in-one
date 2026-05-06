@@ -176,6 +176,7 @@ onMounted(() => {
     <!-- 表格 -->
     <div class="table-container">
       <div class="table-header">
+        <div class="th-cell th-index">序号</div>
         <div class="th-cell th-agent">Agent</div>
         <div class="th-cell th-category">分类</div>
         <div class="th-cell th-status">状态</div>
@@ -191,7 +192,8 @@ onMounted(() => {
         </div>
         <div v-else-if="filteredAgents.length === 0" class="empty-state">暂无 Agent 数据</div>
         <template v-else>
-          <div v-for="agent in filteredAgents" :key="agent.id" class="table-row">
+          <div v-for="(agent, index) in filteredAgents" :key="agent.id" class="table-row">
+            <div class="td-cell td-index">{{ index + 1 }}</div>
             <div class="td-cell td-agent">
               <div class="agent-info">
                 <span class="agent-icon">{{ agent.icon || '🤖' }}</span>
@@ -436,6 +438,7 @@ onMounted(() => {
 }
 
 .th-cell { padding: 0 8px; }
+.th-index { flex: 0 0 50px; text-align: center; }
 .th-agent { flex: 2; }
 .th-category { flex: 1; }
 .th-status { flex: 0.8; }
@@ -461,6 +464,7 @@ onMounted(() => {
 }
 
 .td-cell { padding: 0 8px; }
+.td-index { flex: 0 0 50px; text-align: center; color: #999; font-size: 13px; }
 .td-agent { flex: 2; }
 .td-category { flex: 1; }
 .td-status { flex: 0.8; }

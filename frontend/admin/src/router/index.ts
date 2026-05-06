@@ -76,6 +76,12 @@ const router = createRouter({
       meta: { title: 'Agent 管理', requiresAuth: true }
     },
     {
+      path: '/agent-manage/:id',
+      name: 'agent-edit',
+      component: () => import('@/views/agents/AgentEditView.vue'),
+      meta: { title: 'Agent 编辑', requiresAuth: true }
+    },
+    {
       path: '/skills',
       name: 'skills',
       component: () => import('@/views/skills/SkillsManageView.vue'),
