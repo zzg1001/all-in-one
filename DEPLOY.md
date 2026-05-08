@@ -2,61 +2,73 @@
 
 ## 服务器要求
 
-- Linux (CentOS/Ubuntu)
+- Linux (CentOS/Ubuntu) 或 Windows Server
 - Docker + Docker Compose
-- Nginx
-- MySQL 8+
+- 2GB+ 内存
+- 开放端口: 80, 443, 3306(可选)
 
-## 目录结构
+## 快速部署
 
-```
+### 1. 上传代码到服务器
+
+```bash
+# 目录结构
 /opt/ai-platform/
-├── frontend/           # 前端代码
-│   ├── portal/
-│   └── admin/
-├── backend/            # 后端代码
-├── deploy.env          # 环境变量
-└── docker-compose*.yml
+├── backend/
+├── frontend/
+├── nginx/
+├── deploy.env
+└── docker-compose.prod.yml
 ```
 
-## 配置 deploy.env
+### 2. 配置环境变量
+
+编辑 `deploy.env`：
 
 ```env
 # 数据库
-DB_HOST=localhost
+DB_HOST=mysql
 DB_PORT=3306
 DB_USER=root
-DB_PASSWORD=【数据库密码】
+DB_PASSWORD=【修改为强密码】
 DB_NAME=ai_agent
+DB_ROOT_PASSWORD=【修改为强密码】
 
 # AI 模型
-ANTHROPIC_AUTH_TOKEN=【Azure Token】
+ANTHROPIC_AUTH_TOKEN=【你的 Azure Token】
 ANTHROPIC_BASE_URL=https://your-azure-proxy-url
 CLAUDE_MODEL=claude-opus-4-5
 
-# JWT
-SECRET_KEY=【64字符随机串】
+# JWT 密钥（64字符随机串）
+SECRET_KEY=【生成随机密钥】
 
-# 跨域
+# 跨域（改为你的域名）
 CORS_ORIGINS=["https://your-domain.com"]
 ```
 
 > 生成 SECRET_KEY：`python3 -c "import secrets; print(secrets.token_hex(32))"`
 
-## 部署步骤
+### 3. 配置域名
 
-### 1. 初始化数据库
+编辑 `nginx/conf.d/default.conf`，将 `your-domain.com` 替换为你的实际域名。
 
-首次部署需要初始化数据库表结构和默认数据：
+### 4. 启动服务
 
 ```bash
-cd backend
+cd /opt/ai-platform
+docker-compose -f docker-compose.prod.yml up -d --build
+```
 
-# 方式一：Python 脚本（推荐）
+### 5. 初始化数据库
+
+首次部署需要初始化：
+
+```bash
+# 进入后端容器
+docker exec -it ai-backend bash
+
+# 执行初始化
 python init_db.py
-
-# 方式二：直接执行 SQL
-mysql -h localhost -P 3306 -u root -p ai_agent < init_db.sql
 ```
 
 **默认账号：**
@@ -67,136 +79,143 @@ mysql -h localhost -P 3306 -u root -p ai_agent < init_db.sql
 | boss | boss123 | 领导 |
 | test | test123 | 测试用户 |
 
-> 如需修改数据库连接，编辑 `init_db.py` 中的 `DB_CONFIG`
+## 服务说明
 
-### 2. 构建前端
+| 服务 | 容器名 | 端口 | 说明 |
+|------|--------|------|------|
+| MySQL | ai-mysql | 3306 | 数据库 |
+| Backend | ai-backend | 8001 | 后端 API |
+| Portal | ai-portal | - | 用户端前端 |
+| Admin | ai-admin | - | 管理端前端 |
+| Nginx | ai-nginx | 80/443 | 反向代理 |
 
-```bash
-cd frontend/portal && npm install && npm run build
-cd ../admin && npm install && npm run build
-```
+## 访问地址
 
-### 3. 启动服务
-
-```bash
-docker-compose -f docker-compose.prod.yml up -d --build
-```
-
-### 3. 配置 Nginx
-
-```nginx
-server {
-    listen 80;
-    server_name your-domain.com;
-
-    # Portal 前端
-    location / {
-        proxy_pass http://127.0.0.1:5173;
-    }
-
-    # Admin 前端
-    location /admin/ {
-        proxy_pass http://127.0.0.1:5174/;
-    }
-
-    # API 代理
-    location /api/ {
-        proxy_pass http://127.0.0.1:8001/api/;
-        proxy_read_timeout 300s;
-    }
-}
-```
+| 页面 | 地址 |
+|------|------|
+| 用户端 | http://your-domain.com/ |
+| 管理端 | http://your-domain.com/admin |
+| API 文档 | http://your-domain.com/api/docs |
 
 ## 常用命令
 
-| 操作 | 命令 |
-|------|------|
-| 查看日志 | `docker logs -f backend` |
-| 重启 | `docker-compose -f docker-compose.prod.yml restart` |
-| 重建 | `docker-compose -f docker-compose.prod.yml up -d --build` |
+```bash
+# 查看所有容器状态
+docker-compose -f docker-compose.prod.yml ps
 
-## 必改项
+# 查看日志
+docker logs -f ai-backend      # 后端日志
+docker logs -f ai-nginx        # Nginx 日志
+docker logs -f ai-mysql        # 数据库日志
 
-| 配置项 | 说明 |
-|--------|------|
-| DB_PASSWORD | 数据库密码 |
-| ANTHROPIC_AUTH_TOKEN | Azure Claude Token |
-| SECRET_KEY | JWT 密钥（64字符） |
-| CORS_ORIGINS | 前端域名 |
+# 重启服务
+docker-compose -f docker-compose.prod.yml restart
+
+# 重新构建并启动
+docker-compose -f docker-compose.prod.yml up -d --build
+
+# 停止所有服务
+docker-compose -f docker-compose.prod.yml down
+
+# 进入容器
+docker exec -it ai-backend bash
+docker exec -it ai-mysql mysql -uroot -p
+```
+
+## HTTPS 配置（可选）
+
+### 1. 准备 SSL 证书
+
+将证书文件放到 `nginx/ssl/` 目录：
+- `your-domain.com.pem` (证书)
+- `your-domain.com.key` (私钥)
+
+### 2. 启用 HTTPS
+
+编辑 `nginx/conf.d/default.conf`：
+
+1. 取消 HTTPS server 块的注释
+2. 修改证书文件名
+3. 取消 HTTP 强制跳转的注释
+
+### 3. 重启 Nginx
+
+```bash
+docker-compose -f docker-compose.prod.yml restart nginx
+```
 
 ## Skills 同步（MinIO）
 
-Skills 文件通过 MinIO 在多节点间共享。
-
-### MinIO 配置
-
-在 `deploy.env` 中配置：
+如需多节点同步 Skills，配置 MinIO：
 
 ```env
-MINIO_ENDPOINT=8.153.198.194
-MINIO_PORT=8092
+# deploy.env 添加
+MINIO_ENDPOINT=your-minio-server
+MINIO_PORT=9000
 MINIO_ACCESS_KEY=admin
-MINIO_SECRET_KEY=yourpassword123
+MINIO_SECRET_KEY=yourpassword
 MINIO_SECURE=false
 MINIO_SKILLS_BUCKET=ai-skills
 ```
 
-### 推送 Skills 到 MinIO（开发环境）
+```bash
+# 推送 Skills 到 MinIO
+docker exec ai-backend python push_skills.py
 
-本地修改 Skills 后，推送到远程供其他节点同步：
+# 从 MinIO 拉取 Skills
+docker exec ai-backend curl -X POST http://localhost:8001/api/skills/sync-all
+```
+
+## 故障排查
+
+### 后端启动失败
 
 ```bash
-cd backend
+# 查看详细日志
+docker logs ai-backend
 
-# 推送所有技能
-python push_skills.py
-
-# 推送指定技能
-python push_skills.py <skill_id>
+# 常见问题：
+# 1. 数据库连接失败 - 检查 DB_HOST 和密码
+# 2. 端口被占用 - 检查 8001 端口
 ```
 
-或通过 API：
+### 前端页面空白
 
 ```bash
-# Linux / Mac / Git Bash
-curl -X POST http://localhost:8001/api/skills/push-all
-curl -X POST http://localhost:8001/api/skills/{skill_id}/push
+# 检查 Nginx 日志
+docker logs ai-nginx
 
-# Windows PowerShell（注意用 curl.exe）
-curl.exe -X POST http://localhost:8001/api/skills/push-all
-curl.exe -X POST http://localhost:8001/api/skills/{skill_id}/push
-
-# 或用 PowerShell 原生语法
-Invoke-WebRequest -Method POST -Uri "http://localhost:8001/api/skills/push-all"
+# 检查前端容器
+docker logs ai-portal
+docker logs ai-admin
 ```
 
-> **Windows 注意：** PowerShell 中 `curl` 是 `Invoke-WebRequest` 的别名，语法不同。使用 `curl.exe` 调用真正的 curl。
-
-### 拉取 Skills（生产环境）
-
-**自动同步：** 服务启动时会自动从 MinIO 拉取最新的 Skills
-
-**手动同步：**
+### 数据库连接失败
 
 ```bash
-# Linux / Mac / Git Bash
-curl -X POST http://localhost:8001/api/skills/sync-all
-curl -X POST http://localhost:8001/api/skills/{skill_id}/sync
+# 检查 MySQL 状态
+docker logs ai-mysql
 
-# Windows PowerShell
-curl.exe -X POST http://localhost:8001/api/skills/sync-all
-curl.exe -X POST http://localhost:8001/api/skills/{skill_id}/sync
+# 测试连接
+docker exec ai-mysql mysql -uroot -p -e "SHOW DATABASES;"
 ```
 
-### 同步流程
+## 备份与恢复
 
+### 备份数据库
+
+```bash
+docker exec ai-mysql mysqldump -uroot -p【密码】 ai_agent > backup_$(date +%Y%m%d).sql
 ```
-开发环境                      MinIO                       生产环境
-    │                           │                            │
-    │ 1. 修改 skill 文件         │                            │
-    │                           │                            │
-    │ 2. python push_skills.py ─►│                            │
-    │                           │                            │
-    │                           │◄─ 3. 启动时自动同步 ─────────│
-    │                           │                            │
+
+### 恢复数据库
+
+```bash
+docker exec -i ai-mysql mysql -uroot -p【密码】 ai_agent < backup.sql
+```
+
+### 备份 Skills
+
+```bash
+tar -czvf skills_backup.tar.gz backend/skills_storage/
 ```

@@ -1,9 +1,9 @@
 # 生产环境 Docker Compose
 #
-# 部署方式:
-#   1. 仅应用: docker-compose -f docker-compose.prod.yml up -d
-#   2. 应用+数据库: docker-compose -f docker-compose.prod.yml --profile db up -d
-#   3. 仅数据库: docker-compose -f docker-compose.prod.yml up -d mysql
+# 部署命令:
+#   docker-compose -f docker-compose.prod.yml up -d --build
+#
+# 包含: MySQL + Backend + Portal + Admin + Nginx
 
 version: '3.8'
 
@@ -11,7 +11,7 @@ services:
   # ========== MySQL 数据库 ==========
   mysql:
     image: mysql:8.0
-    container_name: mysql
+    container_name: ai-mysql
     restart: always
     ports:
       - "3306:3306"
@@ -26,51 +26,83 @@ services:
       - --collation-server=utf8mb4_unicode_ci
     networks:
       - app-network
-    profiles:
-      - db
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  # ========== Backend (统一后端) ==========
+  # ========== Backend ==========
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: backend
+    container_name: ai-backend
     restart: always
     ports:
-      - "8001:8000"
+      - "8001:8001"
     env_file:
       - ./deploy.env
+    environment:
+      - DB_HOST=mysql
     volumes:
       - ./backend/skills_storage:/app/skills_storage
       - ./backend/outputs:/app/outputs
       - ./backend/uploads:/app/uploads
       - ./backend/file_manage:/app/file_manage
+      - ./logs:/app/logs
     networks:
       - app-network
+    depends_on:
+      mysql:
+        condition: service_healthy
 
   # ========== Frontend - Portal ==========
   portal-web:
     build:
       context: ./frontend/portal
       dockerfile: Dockerfile
-    container_name: portal-web
+      args:
+        - VITE_API_BASE_URL=/api
+    container_name: ai-portal
     restart: always
-    ports:
-      - "5173:80"
     networks:
       - app-network
+    depends_on:
+      - backend
 
   # ========== Frontend - Admin ==========
   admin-web:
     build:
       context: ./frontend/admin
       dockerfile: Dockerfile
-    container_name: admin-web
+      args:
+        - VITE_API_BASE_URL=/api
+    container_name: ai-admin
     restart: always
-    ports:
-      - "5174:80"
     networks:
       - app-network
+    depends_on:
+      - backend
+
+  # ========== Nginx 网关 ==========
+  nginx:
+    image: nginx:alpine
+    container_name: ai-nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    networks:
+      - app-network
+    depends_on:
+      - backend
+      - portal-web
+      - admin-web
 
 networks:
   app-network:

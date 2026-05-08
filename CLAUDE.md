@@ -78,8 +78,20 @@ uvicorn main:app --reload --port 8001
 ### Docker
 
 ```bash
-# 开发环境
-docker-compose up -d
+# 只启动后端 + 数据库（开发常用）
+docker-compose up -d mysql backend
+
+# 启动全部服务（包含前端）
+docker-compose --profile frontend up -d
+
+# 查看后端日志
+docker-compose logs -f backend
+
+# 重新构建后端镜像（代码改动后）
+docker-compose build backend && docker-compose up -d backend
+
+# 停止所有服务
+docker-compose down
 
 # 生产环境
 docker-compose -f docker-compose.prod.yml up -d
@@ -114,6 +126,18 @@ docker-compose -f docker-compose.prod.yml up -d
 | GET/POST/PUT/DELETE | `/api/models` | 模型配置 |
 | GET/POST/PUT/DELETE | `/api/users` | 用户管理 |
 | GET/POST/PUT/DELETE | `/api/permissions/roles` | 权限管理 |
+
+### Proxy API（API 代理服务）
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/proxy/configs` | 获取所有代理配置 |
+| POST | `/api/proxy/configs` | 创建代理配置 |
+| PUT | `/api/proxy/configs/{id}` | 更新代理配置 |
+| DELETE | `/api/proxy/configs/{id}` | 删除代理配置 |
+| POST | `/api/proxy/configs/{id}/start` | 启动代理服务（独立进程） |
+| POST | `/api/proxy/configs/{id}/stop` | 停止代理服务 |
+| GET | `/api/proxy/status` | 获取代理运行状态 |
+| POST | `/api/proxy/test-connection` | 测试 API 连接 |
 
 ## Environment Configuration
 
@@ -153,3 +177,35 @@ AI responses use Server-Sent Events via `agentApi.chatStream()`.
 ## Agent Architecture
 
 基于 Claude Agent SDK，使用内置工具（Bash, Read, Write, Edit, Glob, Grep）直接解决问题。
+
+## API Proxy（API 代理功能）
+
+将 Anthropic Claude SDK 请求代理转发到其他模型（如阿里云 DashScope Qwen）。
+
+### 工作原理
+1. 启动独立代理进程，监听指定端口（如 4000）
+2. 接收 Anthropic API 格式请求
+3. 转换为目标 API 格式（OpenAI 或 Anthropic 兼容）
+4. 返回 Anthropic 格式响应
+
+### 使用方式
+1. 在 Admin 管理端 → 模型配置 → API 代理 标签页
+2. 创建代理配置（设置目标 API 地址、API Key、模型）
+3. 点击"启动代理"
+4. 在模型配置中使用代理：
+   - Base URL: `http://localhost:4000`（代理端口）
+   - Model: 代理配置中的对外模型名
+
+### 代理配置字段
+| 字段 | 说明 |
+|------|------|
+| proxy_port | 代理监听端口（默认 4000） |
+| proxy_model | 对外模型名（如 claude-sonnet-4-20250514） |
+| target_base_url | 原始 API 地址（如 https://dashscope.aliyuncs.com/apps/anthropic） |
+| target_api_key | 原始 API Key |
+| target_model | 原始模型名（如 qwen-plus） |
+
+### 进程管理
+- PID 持久化到数据库，后端重启后可恢复管理
+- 自动清理孤儿进程
+- 使用 psutil 库进行跨平台进程管理
