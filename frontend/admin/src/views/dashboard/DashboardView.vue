@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { dashboardApi } from '@/api'
+import { dashboardApi, type DashboardStats, type DashboardTrends } from '@/api'
 
 // 统计数据
-const stats = ref({
+const stats = ref<DashboardStats>({
   today_sessions: 0,
   today_messages: 0,
   today_executions: 0,
@@ -22,12 +22,12 @@ const stats = ref({
 })
 
 // 趋势数据
-const trends = ref({
-  dates: [] as string[],
-  sessions: [] as number[],
-  messages: [] as number[],
-  executions: [] as number[],
-  tokens: [] as number[],
+const trends = ref<DashboardTrends>({
+  dates: [],
+  sessions: [],
+  messages: [],
+  executions: [],
+  tokens: [],
 })
 
 // 最近反馈
