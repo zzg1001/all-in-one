@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 
 # Admin API
 from app.api.v1 import dashboard, models, tokens, users, logs, permissions, ccswitch, auth, feedback as admin_feedback
+from app.api.v1 import proxy as proxy_api
+from app.services.proxy_service import router as proxy_router
 
 # Portal API
 from portal.routers import skills_router, workflows_router, agent_router, executions_router, data_notes_router, chat_router
@@ -43,8 +45,9 @@ from portal.routers.storage import router as storage_router
 from portal.routers.cleanup import router as cleanup_router
 from portal.routers.feedback import router as portal_feedback_router
 
-# Portal models (确保表被创建)
+# Models (确保表被创建)
 import portal.models  # noqa: F401
+import app.models  # noqa: F401
 
 settings = get_settings()
 
@@ -108,6 +111,8 @@ app.include_router(logs.router, prefix="/api/logs", tags=["Admin - Logs"])
 app.include_router(permissions.router, prefix="/api/permissions", tags=["Admin - Permissions"])
 app.include_router(ccswitch.router, prefix="/api/ccswitch", tags=["Admin - CCSwitch"])
 app.include_router(admin_feedback.router, tags=["Admin - Feedback"])
+app.include_router(proxy_api.router, tags=["Admin - Proxy"])
+app.include_router(proxy_router, tags=["Proxy Service"])
 
 # ========== Portal API Routers ==========
 app.include_router(skills_router, tags=["Portal - Skills"])

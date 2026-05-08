@@ -2,6 +2,243 @@
 import { ref, onMounted, computed, watch } from 'vue'
 import { ccswitchApi, type CCConfig } from '@/api'
 
+// Tab 切换
+const activeTab = ref<'models' | 'proxy'>('models')
+
+// ========== 代理配置相关 ==========
+interface ProxyConfig {
+  id: string
+  name: string
+  description: string
+  target_base_url: string   // 原始API地址（如 DashScope）
+  target_api_key: string
+  target_model: string      // 原始模型
+  proxy_port: number        // 代理端口
+  proxy_url: string         // 代理地址（对外）
+  proxy_model: string       // 对外模型名（如 claude-3-opus）
+  max_tokens: number
+  temperature: number
+  is_running: boolean
+}
+
+interface ProxyStatus {
+  is_running: boolean
+  proxy_model: string | null  // 对外模型名
+  proxy_url: string | null    // 代理地址
+  running_config_name: string | null
+}
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8001'
+const proxyConfigs = ref<ProxyConfig[]>([])
+const proxyStatus = ref<ProxyStatus | null>(null)
+const proxyLoading = ref(false)
+const showProxyModal = ref(false)
+const isProxyEditing = ref(false)
+const showProxyApiKey = ref(false)
+
+const proxyForm = ref({
+  id: '',
+  name: '',
+  description: '',
+  proxy_port: 4000,
+  proxy_url: 'http://localhost:4000',
+  proxy_model: 'claude-sonnet-4-20250514',
+  target_base_url: 'https://dashscope.aliyuncs.com/apps/anthropic',
+  target_api_key: '',
+  target_model: 'qwen-plus',
+  max_tokens: 4096,
+  temperature: 0.7,
+})
+
+// Toast 提示
+const toast = ref({ show: false, type: 'success' as 'success' | 'error', message: '' })
+function showToast(type: 'success' | 'error', message: string) {
+  toast.value = { show: true, type, message }
+  setTimeout(() => { toast.value.show = false }, 3000)
+}
+
+// 测试连通性
+const isTesting = ref(false)
+async function testConnection() {
+  if (!proxyForm.value.target_base_url || !proxyForm.value.target_api_key || !proxyForm.value.target_model) {
+    showToast('error', '请先填写原始 API 地址、API Key 和模型')
+    return
+  }
+  isTesting.value = true
+  try {
+    const res = await fetch(`${API_BASE}/api/proxy/test-connection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target_base_url: proxyForm.value.target_base_url,
+        target_api_key: proxyForm.value.target_api_key,
+        target_model: proxyForm.value.target_model
+      })
+    })
+    const data = await res.json()
+    if (data.success) {
+      showToast('success', data.message)
+    } else {
+      showToast('error', data.message)
+    }
+  } catch (e) {
+    showToast('error', '测试请求失败')
+  } finally {
+    isTesting.value = false
+  }
+}
+
+
+async function fetchProxyConfigs() {
+  proxyLoading.value = true
+  try {
+    const res = await fetch(`${API_BASE}/api/proxy/configs`)
+    if (res.ok) proxyConfigs.value = await res.json()
+  } catch (e) { console.error('获取代理配置失败:', e) }
+  finally { proxyLoading.value = false }
+}
+
+async function fetchProxyStatus() {
+  try {
+    const res = await fetch(`${API_BASE}/api/proxy/status`)
+    if (res.ok) {
+      proxyStatus.value = await res.json()
+    }
+  } catch (e) { console.error('获取代理状态失败:', e) }
+}
+
+async function saveProxyConfig() {
+  try {
+    const url = isProxyEditing.value ? `${API_BASE}/api/proxy/configs/${proxyForm.value.id}` : `${API_BASE}/api/proxy/configs`
+    const res = await fetch(url, { method: isProxyEditing.value ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(proxyForm.value) })
+    if (res.ok) {
+      showProxyModal.value = false
+      showToast('success', isProxyEditing.value ? '配置已更新' : '配置已创建')
+      fetchProxyConfigs()
+      fetchProxyStatus()
+    } else {
+      const err = await res.json()
+      showToast('error', err.detail || '保存失败')
+    }
+  } catch (e) {
+    showToast('error', '保存失败')
+  }
+}
+
+async function deleteProxyConfig(config: ProxyConfig) {
+  if (!confirm(`确定删除配置 "${config.name}"？`)) return
+  try {
+    const res = await fetch(`${API_BASE}/api/proxy/configs/${config.id}`, { method: 'DELETE' })
+    if (res.ok) {
+      showToast('success', '配置已删除')
+      fetchProxyConfigs()
+      fetchProxyStatus()
+    }
+  } catch (e) {
+    showToast('error', '删除失败')
+  }
+}
+
+async function startProxy(config: ProxyConfig) {
+  try {
+    const res = await fetch(`${API_BASE}/api/proxy/configs/${config.id}/start`, { method: 'POST' })
+    const data = await res.json()
+    if (res.ok) {
+      showToast('success', `代理已启动 - ${data.proxy_url}`)
+      fetchProxyConfigs()
+      fetchProxyStatus()
+    } else {
+      showToast('error', data.detail || '启动失败')
+    }
+  } catch (e) {
+    showToast('error', '启动失败')
+  }
+}
+
+function copyToClipboard(text: string, label: string) {
+  navigator.clipboard.writeText(text)
+  showToast('success', `已复制 ${label}`)
+}
+
+async function stopProxy(config: ProxyConfig) {
+  try {
+    const res = await fetch(`${API_BASE}/api/proxy/configs/${config.id}/stop`, { method: 'POST' })
+    if (res.ok) {
+      showToast('success', '代理已停止')
+      fetchProxyConfigs()
+      fetchProxyStatus()
+    }
+  } catch (e) {
+    showToast('error', '停止失败')
+  }
+}
+
+async function restartProxy(config: ProxyConfig) {
+  showToast('success', '正在重启...')
+  try {
+    // 先停止
+    await fetch(`${API_BASE}/api/proxy/configs/${config.id}/stop`, { method: 'POST' })
+    // 等待一下
+    await new Promise(resolve => setTimeout(resolve, 500))
+    // 再启动
+    const res = await fetch(`${API_BASE}/api/proxy/configs/${config.id}/start`, { method: 'POST' })
+    if (res.ok) {
+      showToast('success', '代理已重启')
+      fetchProxyConfigs()
+      fetchProxyStatus()
+    } else {
+      showToast('error', '重启失败')
+    }
+  } catch (e) {
+    showToast('error', '重启失败')
+  }
+}
+
+function openProxyCreateModal() {
+  isProxyEditing.value = false; showProxyApiKey.value = false
+  proxyForm.value = {
+    id: '',
+    name: '',
+    description: '',
+    proxy_port: 4000,
+    proxy_url: 'http://localhost:4000',
+    proxy_model: 'claude-sonnet-4-20250514',
+    target_base_url: 'https://dashscope.aliyuncs.com/apps/anthropic',
+    target_api_key: '',
+    target_model: 'qwen-plus',
+    max_tokens: 4096,
+    temperature: 0.7
+  }
+  showProxyModal.value = true
+}
+
+function openProxyEditModal(config: ProxyConfig) {
+  isProxyEditing.value = true; showProxyApiKey.value = false
+  const port = config.proxy_port || 4000
+  proxyForm.value = {
+    id: config.id,
+    name: config.name,
+    description: config.description || '',
+    target_base_url: config.target_base_url || '',
+    target_api_key: config.target_api_key || '',
+    target_model: config.target_model || '',
+    proxy_port: port,
+    proxy_url: config.proxy_url || `http://localhost:${port}`,
+    proxy_model: config.proxy_model || 'claude-sonnet-4-20250514',
+    max_tokens: config.max_tokens || 4096,
+    temperature: config.temperature ?? 0.7
+  }
+  showProxyModal.value = true
+}
+
+function copyProxyUrl() {
+  if (proxyStatus.value?.proxy_url) {
+    navigator.clipboard.writeText(proxyStatus.value.proxy_url)
+    showToast('success', '已复制代理地址')
+  }
+}
+
+// ========== 模型配置相关 ==========
 // 状态
 const configs = ref<CCConfig[]>([])
 const loading = ref(false)
@@ -251,11 +488,30 @@ const handleFileImport = (event: Event) => {
   reader.readAsText(file)
 }
 
-onMounted(loadConfigs)
+onMounted(() => {
+  loadConfigs()
+  fetchProxyConfigs()
+  fetchProxyStatus()
+})
 </script>
 
 <template>
   <div class="models-page">
+    <!-- Tab 切换 -->
+    <div class="tabs-header">
+      <button class="tab-btn" :class="{ active: activeTab === 'models' }" @click="activeTab = 'models'">
+        <svg viewBox="0 0 20 20" fill="currentColor"><path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3z"/></svg>
+        模型配置
+      </button>
+      <button class="tab-btn" :class="{ active: activeTab === 'proxy' }" @click="activeTab = 'proxy'">
+        <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 4a2 2 0 00-2 2v4a2 2 0 002 2V6h10a2 2 0 00-2-2H4zm2 6a2 2 0 012-2h8a2 2 0 012 2v4a2 2 0 01-2 2H8a2 2 0 01-2-2v-4zm6 4a2 2 0 100-4 2 2 0 000 4z" clip-rule="evenodd"/></svg>
+        API 代理
+        <span v-if="proxyStatus?.is_running" class="status-dot running"></span>
+      </button>
+    </div>
+
+    <!-- ========== 模型配置 Tab ========== -->
+    <div v-show="activeTab === 'models'">
     <!-- 顶部操作栏 -->
     <div class="page-header">
       <div class="header-info">
@@ -499,7 +755,7 @@ onMounted(loadConfigs)
                 <div class="form-group">
                   <label>Base URL</label>
                   <input v-model="editingConfig!.base_url" type="text" placeholder="留空使用默认 Anthropic API" />
-                  <span class="form-hint">如使用 Azure 代理，填写代理地址</span>
+                  <span class="form-hint">SDK 会自动添加 /v1/messages，如用代理填 http://localhost:4000</span>
                 </div>
                 <div class="form-group full">
                   <label>API Key <span class="required">*</span></label>
@@ -583,6 +839,173 @@ onMounted(loadConfigs)
           </div>
         </div>
       </div>
+    </Teleport>
+    </div><!-- End models tab -->
+
+    <!-- ========== API 代理 Tab ========== -->
+    <div v-show="activeTab === 'proxy'" class="proxy-tab">
+      <!-- 运行状态卡片 -->
+      <div class="proxy-status-card" :class="{ running: proxyStatus?.is_running }">
+        <div class="status-content">
+          <div class="status-indicator">
+            <span class="dot" :class="proxyStatus?.is_running ? 'running' : 'stopped'"></span>
+            <span class="status-label">{{ proxyStatus?.is_running ? '运行中' : '已停止' }}</span>
+          </div>
+          <template v-if="proxyStatus?.is_running">
+            <div class="status-info">
+              <span class="info-label">配置:</span>
+              <span class="info-value">{{ proxyStatus.running_config_name }}</span>
+            </div>
+            <div class="status-info clickable" @click="copyToClipboard(proxyStatus.proxy_model || '', '代理模型')">
+              <span class="info-label">代理模型:</span>
+              <span class="info-value proxy-url">{{ proxyStatus.proxy_model }}</span>
+              <svg viewBox="0 0 20 20" fill="currentColor"><path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z"/><path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z"/></svg>
+            </div>
+            <div class="status-info clickable" @click="copyToClipboard(proxyStatus.proxy_url || '', '代理地址')">
+              <span class="info-label">代理地址:</span>
+              <span class="info-value proxy-url">{{ proxyStatus.proxy_url }}</span>
+              <svg viewBox="0 0 20 20" fill="currentColor"><path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z"/><path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z"/></svg>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- 工具栏 -->
+      <div class="proxy-toolbar">
+        <button class="btn-primary" @click="openProxyCreateModal">
+          <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd"/></svg>
+          新建配置
+        </button>
+        <button class="btn-secondary" @click="fetchProxyConfigs">
+          <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1z" clip-rule="evenodd"/></svg>
+          刷新
+        </button>
+      </div>
+
+      <!-- 配置列表 -->
+      <div class="proxy-list">
+        <div v-if="proxyLoading" class="loading-state"><div class="spinner"></div><span>加载中...</span></div>
+        <div v-else-if="proxyConfigs.length === 0" class="empty-state">
+          <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 4a2 2 0 00-2 2v4a2 2 0 002 2V6h10a2 2 0 00-2-2H4zm2 6a2 2 0 012-2h8a2 2 0 012 2v4a2 2 0 01-2 2H8a2 2 0 01-2-2v-4z" clip-rule="evenodd"/></svg>
+          <p>暂无代理配置</p>
+          <button class="btn-primary" @click="openProxyCreateModal">创建代理配置</button>
+        </div>
+        <div v-else class="proxy-grid">
+          <div v-for="config in proxyConfigs" :key="config.id" class="proxy-card" :class="{ active: config.is_running }">
+            <div class="card-header">
+              <div class="card-title">
+                <h3>{{ config.name }}</h3>
+                <span class="status-badge" :class="config.is_running ? 'running' : 'stopped'">{{ config.is_running ? '运行中' : '已停止' }}</span>
+              </div>
+              <div class="card-actions">
+                <button v-if="config.is_running" class="icon-btn" @click="restartProxy(config)" title="重启"><svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/></svg></button>
+                <button class="icon-btn" :class="{ disabled: config.is_running }" :disabled="config.is_running" @click="openProxyEditModal(config)" :title="config.is_running ? '运行中无法编辑，请先停止' : '编辑'"><svg viewBox="0 0 20 20" fill="currentColor"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/></svg></button>
+                <button class="icon-btn danger" :class="{ disabled: config.is_running }" :disabled="config.is_running" @click="deleteProxyConfig(config)" :title="config.is_running ? '运行中无法删除，请先停止' : '删除'"><svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg></button>
+              </div>
+            </div>
+            <div class="card-body">
+              <p class="config-desc">{{ config.description || '暂无描述' }}</p>
+              <div class="config-info">
+                <div class="info-row"><span class="info-label">目标模型</span><span class="info-value model-tag">{{ config.target_model }}</span></div>
+                <div class="info-row"><span class="info-label">Base URL</span><span class="info-value url-value" :title="config.target_base_url">{{ config.target_base_url }}</span></div>
+              </div>
+            </div>
+            <div class="card-footer">
+              <button v-if="!config.is_running" class="btn-start" @click="startProxy(config)">启动代理</button>
+              <button v-else class="btn-stop" @click="stopProxy(config)">停止代理</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 代理配置弹框 -->
+      <Teleport to="body">
+        <div v-if="showProxyModal" class="modal-overlay" @click.self="showProxyModal = false">
+          <div class="modal">
+            <div class="modal-header">
+              <h2>{{ isProxyEditing ? '编辑代理配置' : '新建代理配置' }}</h2>
+              <button class="modal-close" @click="showProxyModal = false">&times;</button>
+            </div>
+            <div class="modal-body">
+              <div class="compact-form">
+                <div class="form-row">
+                  <div class="form-field">
+                    <label>配置名称 <span class="required">*</span></label>
+                    <input v-model="proxyForm.name" type="text" placeholder="如：Qwen 代理" autocomplete="off" />
+                  </div>
+                  <div class="form-field">
+                    <label>描述</label>
+                    <input v-model="proxyForm.description" type="text" placeholder="配置用途说明" autocomplete="off" />
+                  </div>
+                </div>
+                <div class="form-section">代理配置（对外 - 客户端使用）</div>
+                <div class="form-row">
+                  <div class="form-field">
+                    <label>代理端口 <span class="required">*</span></label>
+                    <input v-model.number="proxyForm.proxy_port" type="number" placeholder="4000" autocomplete="off" />
+                  </div>
+                  <div class="form-field flex-2">
+                    <label>对外模型名</label>
+                    <input v-model="proxyForm.proxy_model" type="text" placeholder="claude-sonnet-4-20250514" autocomplete="off" />
+                  </div>
+                </div>
+                <div class="form-section">原始 API 配置（后端实际调用）</div>
+                <div class="form-row">
+                  <div class="form-field flex-2">
+                    <label>原始 API 地址 <span class="required">*</span></label>
+                    <input v-model="proxyForm.target_base_url" type="text" placeholder="https://dashscope.aliyuncs.com/apps/anthropic" autocomplete="off" />
+                  </div>
+                  <div class="form-field">
+                    <label>原始模型 <span class="required">*</span></label>
+                    <input v-model="proxyForm.target_model" type="text" placeholder="qwen-plus" autocomplete="off" />
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-field flex-2">
+                    <label>API Key <span class="required">*</span></label>
+                    <div class="input-with-toggle">
+                      <input v-model="proxyForm.target_api_key" :type="showProxyApiKey ? 'text' : 'password'" placeholder="sk-..." autocomplete="new-password" />
+                      <button type="button" class="toggle-btn" @click="showProxyApiKey = !showProxyApiKey">
+                        <svg v-if="showProxyApiKey" viewBox="0 0 20 20" fill="currentColor"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z"/><path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd"/></svg>
+                        <svg v-else viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3.707 2.293a1 1 0 00-1.414 1.414l14 14a1 1 0 001.414-1.414l-1.473-1.473A10.014 10.014 0 0019.542 10C18.268 5.943 14.478 3 10 3a9.958 9.958 0 00-4.512 1.074l-1.78-1.781zm4.261 4.26l1.514 1.515a2.003 2.003 0 012.45 2.45l1.514 1.514a4 4 0 00-5.478-5.478z" clip-rule="evenodd"/><path d="M12.454 16.697L9.75 13.992a4 4 0 01-3.742-3.741L2.335 6.578A9.98 9.98 0 00.458 10c1.274 4.057 5.065 7 9.542 7 .847 0 1.669-.105 2.454-.303z"/></svg>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="form-field">
+                    <label>Max Tokens</label>
+                    <input v-model.number="proxyForm.max_tokens" type="number" autocomplete="off" />
+                  </div>
+                  <div class="form-field">
+                    <label>Temperature</label>
+                    <input v-model.number="proxyForm.temperature" type="number" step="0.1" min="0" max="2" autocomplete="off" />
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn-test" @click="testConnection" :disabled="isTesting">
+                <svg v-if="isTesting" class="spin" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1z" clip-rule="evenodd"/></svg>
+                <svg v-else viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd"/></svg>
+                {{ isTesting ? '测试中...' : '测试连接' }}
+              </button>
+              <div class="footer-spacer"></div>
+              <button class="btn-secondary" @click="showProxyModal = false">取消</button>
+              <button class="btn-primary" @click="saveProxyConfig">{{ isProxyEditing ? '保存' : '创建' }}</button>
+            </div>
+          </div>
+        </div>
+      </Teleport>
+    </div><!-- End proxy tab -->
+
+    <!-- Toast 提示 -->
+    <Teleport to="body">
+      <Transition name="toast">
+        <div v-if="toast.show" class="toast" :class="toast.type">
+          <svg v-if="toast.type === 'success'" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+          <svg v-else viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg>
+          <span>{{ toast.message }}</span>
+        </div>
+      </Transition>
     </Teleport>
   </div>
 </template>
@@ -915,6 +1338,13 @@ onMounted(loadConfigs)
   color: #ef4444;
 }
 
+.icon-btn.disabled,
+.icon-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 .icon-btn svg {
   width: 16px;
   height: 16px;
@@ -1220,13 +1650,9 @@ onMounted(loadConfigs)
 
 .modal {
   background: white;
-  border-radius: 16px;
+  border-radius: 12px;
   width: 100%;
-  max-width: 560px;
-  max-height: 90vh;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
+  max-width: 800px;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
 }
 
@@ -1234,13 +1660,13 @@ onMounted(loadConfigs)
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 20px 24px;
+  padding: 14px 24px;
   border-bottom: 1px solid #e5e7eb;
 }
 
 .modal-header h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
   color: #1f2937;
 }
@@ -1266,35 +1692,146 @@ onMounted(loadConfigs)
 }
 
 .modal-body {
-  padding: 24px;
-  overflow-y: auto;
-  flex: 1;
+  padding: 16px 24px;
 }
 
 .modal-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 12px;
-  padding: 16px 24px;
+  gap: 10px;
+  padding: 12px 24px;
   background: #f9fafb;
   border-top: 1px solid #e5e7eb;
 }
 
+.footer-spacer {
+  flex: 1;
+}
+
+.btn-test {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: white;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #374151;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-test:hover:not(:disabled) {
+  border-color: #1677ff;
+  color: #1677ff;
+}
+
+.btn-test:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-test svg {
+  width: 16px;
+  height: 16px;
+}
+
+.btn-test svg.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 /* 表单 */
+/* 紧凑表单布局 */
+.compact-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.form-row {
+  display: flex;
+  gap: 12px;
+}
+
+.form-field {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.form-field.flex-2 {
+  flex: 2;
+}
+
+.form-field label {
+  font-size: 12px;
+  font-weight: 500;
+  color: #374151;
+}
+
+.form-field label .required {
+  color: #ef4444;
+}
+
+.form-field input {
+  padding: 8px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.form-field input:focus {
+  outline: none;
+  border-color: #1677ff;
+  box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.1);
+}
+
+.form-section {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 8px 0 4px;
+  border-top: 1px solid #f3f4f6;
+  margin-top: 4px;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  gap: 12px;
 }
 
 .form-group {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .form-group.full {
   grid-column: 1 / -1;
+}
+
+.form-group.section-header {
+  margin-top: 6px;
+  margin-bottom: -6px;
+}
+
+.section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .form-group label {
@@ -1310,9 +1847,9 @@ onMounted(loadConfigs)
 .form-group input,
 .form-group select,
 .form-group textarea {
-  padding: 10px 12px;
+  padding: 8px 10px;
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: 6px;
   font-size: 13px;
   transition: all 0.15s;
 }
@@ -1464,5 +2001,356 @@ onMounted(loadConfigs)
 .input-with-toggle .toggle-btn svg {
   width: 18px;
   height: 18px;
+}
+
+/* ========== Tab 切换样式 ========== */
+.tabs-header {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+  background: white;
+  padding: 6px;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  width: fit-content;
+}
+
+.tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: none;
+  background: transparent;
+  color: #6b7280;
+  position: relative;
+}
+
+.tab-btn:hover {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.tab-btn.active {
+  background: #1677ff;
+  color: white;
+}
+
+.tab-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.tab-btn .status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #10b981;
+  animation: pulse 2s infinite;
+}
+
+.tab-btn .status-dot.running {
+  background: #10b981;
+}
+
+/* ========== 代理 Tab 样式 ========== */
+.proxy-tab {
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.proxy-status-card {
+  background: white;
+  border-radius: 12px;
+  padding: 20px 24px;
+  margin-bottom: 24px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  border-left: 4px solid #e5e7eb;
+}
+
+.proxy-status-card.running {
+  border-left-color: #10b981;
+  background: linear-gradient(135deg, #ecfdf5 0%, #f0fdf4 100%);
+}
+
+.status-content {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.status-indicator .dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-indicator .dot.running {
+  background: #10b981;
+  box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.2);
+  animation: pulse 2s infinite;
+}
+
+.status-indicator .dot.stopped {
+  background: #9ca3af;
+}
+
+.status-indicator .status-label {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.status-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 6px;
+}
+
+.status-info .info-label {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.status-info .info-value {
+  font-size: 13px;
+  font-weight: 500;
+  color: #374151;
+}
+
+.status-info .info-value.proxy-url {
+  font-family: 'SF Mono', monospace;
+  font-size: 12px;
+  color: #1677ff;
+}
+
+.status-info.clickable {
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.status-info.clickable:hover {
+  background: rgba(22, 119, 255, 0.1);
+}
+
+.status-info.clickable svg {
+  width: 14px;
+  height: 14px;
+  color: #9ca3af;
+}
+
+/* 代理工具栏 */
+.proxy-toolbar {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+/* 代理列表 */
+.proxy-list {
+  min-height: 300px;
+}
+
+.proxy-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 20px;
+}
+
+.proxy-card {
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  overflow: hidden;
+  position: relative;
+  transition: all 0.2s;
+}
+
+.proxy-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.proxy-card.active {
+  border: 2px solid #10b981;
+}
+
+.proxy-card .status-badge.running {
+  background: #ecfdf5;
+  color: #059669;
+}
+
+.proxy-card .status-badge.stopped {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+/* 启动/停止按钮 */
+.btn-start, .btn-stop {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  border: none;
+}
+
+.btn-start {
+  background: #10b981;
+  color: white;
+}
+
+.btn-start:hover {
+  background: #059669;
+}
+
+.btn-stop {
+  background: #fee2e2;
+  color: #ef4444;
+  border: 1px solid #fecaca;
+}
+
+.btn-stop:hover {
+  background: #fecaca;
+}
+
+/* 表单提示 */
+.form-group label .hint {
+  font-size: 11px;
+  color: #9ca3af;
+  font-weight: 400;
+  margin-left: 4px;
+}
+
+/* ========== Toast 提示 ========== */
+.toast {
+  position: fixed;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 24px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  z-index: 10000;
+}
+
+.toast svg {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.toast.success {
+  background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+  color: #059669;
+  border: 1px solid #a7f3d0;
+}
+
+.toast.error {
+  background: linear-gradient(135deg, #fef2f2 0%, #fecaca 100%);
+  color: #dc2626;
+  border: 1px solid #fca5a5;
+}
+
+.toast-enter-active,
+.toast-leave-active {
+  transition: all 0.3s ease;
+}
+
+.toast-enter-from {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-30px);
+}
+
+.toast-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-20px);
+}
+
+/* 状态栏样式 */
+.status-info.editing {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+}
+
+.url-action-btn {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: #9ca3af;
+  cursor: pointer;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+
+.url-action-btn:hover {
+  background: rgba(22, 119, 255, 0.1);
+  color: #1677ff;
+}
+
+.url-action-btn.confirm {
+  color: #10b981;
+}
+
+.url-action-btn.confirm:hover {
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.url-action-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.url-input {
+  padding: 4px 8px;
+  border: 1px solid #1677ff;
+  border-radius: 4px;
+  font-family: 'SF Mono', monospace;
+  font-size: 12px;
+  color: #1677ff;
+  background: white;
+  min-width: 280px;
+}
+
+.url-input:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.2);
 }
 </style>

@@ -48,7 +48,7 @@ def get_db():
 def init_db():
     """Initialize database tables and default data"""
     # 导入所有模型以确保表被创建
-    from app.models import User  # noqa: F401
+    from app.models import User, ProxyConfig  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
 
@@ -60,8 +60,53 @@ def init_db():
     db = SessionLocal()
     try:
         init_default_users(db)
+        # 初始化默认代理配置
+        _init_default_proxy_configs(db)
     finally:
         db.close()
+
+
+def _init_default_proxy_configs(db):
+    """初始化默认代理配置"""
+    import uuid
+    from app.models import ProxyConfig
+
+    # 检查是否已有 DashScope Qwen 配置
+    existing = db.query(ProxyConfig).filter(ProxyConfig.name == "DashScope Qwen").first()
+    if existing:
+        # 更新现有配置
+        existing.target_base_url = "https://dashscope.aliyuncs.com/apps/anthropic"
+        existing.target_api_key = "sk-f56f11bb8f0e48a985a655b36ce2970e"
+        existing.target_model = "qwen3.6-plus"
+        # 设置默认的 proxy_url 和 proxy_model（如果未设置）
+        if not existing.proxy_url:
+            existing.proxy_url = "http://localhost:8001/proxy/v1/messages"
+        if not existing.proxy_model:
+            existing.proxy_model = "claude-sonnet-4-20250514"
+        db.commit()
+        print("[Init] 已更新代理配置: DashScope Qwen")
+        return
+
+    # 创建 DashScope Qwen 配置
+    config = ProxyConfig(
+        id=str(uuid.uuid4()),
+        name="DashScope Qwen",
+        description="阿里云 DashScope Qwen 模型代理",
+        proxy_type="anthropic_to_openai",
+        target_base_url="https://dashscope.aliyuncs.com/apps/anthropic",
+        target_api_key="sk-f56f11bb8f0e48a985a655b36ce2970e",
+        target_model="qwen3.6-plus",
+        proxy_url="http://localhost:8001/proxy/v1/messages",
+        proxy_model="claude-sonnet-4-20250514",
+        proxy_port=4000,
+        max_tokens=4096,
+        temperature=0.7,
+        is_enabled=False,
+        is_running=False,
+    )
+    db.add(config)
+    db.commit()
+    print("[Init] 已创建默认代理配置: DashScope Qwen")
 
 
 def _run_migrations():
@@ -94,5 +139,30 @@ def _run_migrations():
             if 'accessible_agent_ids' not in columns:
                 conn.execute(text('ALTER TABLE agents ADD COLUMN accessible_agent_ids JSON'))
                 print('[Migration] Added accessible_agent_ids column to agents')
+
+        # proxy_configs 表迁移
+        if 'proxy_configs' in inspector.get_table_names():
+            columns = [col['name'] for col in inspector.get_columns('proxy_configs')]
+
+            # 添加 proxy_url 列（代理地址）
+            if 'proxy_url' not in columns:
+                conn.execute(text('ALTER TABLE proxy_configs ADD COLUMN proxy_url VARCHAR(500)'))
+                print('[Migration] Added proxy_url column to proxy_configs')
+
+            # 添加 proxy_model 列（对外模型名）
+            if 'proxy_model' not in columns:
+                conn.execute(text('ALTER TABLE proxy_configs ADD COLUMN proxy_model VARCHAR(100)'))
+                print('[Migration] Added proxy_model column to proxy_configs')
+
+            # 如果有旧的 display_base_url 列，迁移数据并删除
+            if 'display_base_url' in columns:
+                conn.execute(text('UPDATE proxy_configs SET proxy_url = display_base_url WHERE proxy_url IS NULL'))
+                conn.execute(text('ALTER TABLE proxy_configs DROP COLUMN display_base_url'))
+                print('[Migration] Migrated display_base_url to proxy_url')
+
+            # 添加 pid 列（进程 PID）
+            if 'pid' not in columns:
+                conn.execute(text('ALTER TABLE proxy_configs ADD COLUMN pid INT'))
+                print('[Migration] Added pid column to proxy_configs')
 
         conn.commit()
