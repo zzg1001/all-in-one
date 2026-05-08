@@ -56,14 +56,14 @@ const maxTrendValue = computed(() => {
 const loadData = async () => {
   loading.value = true
   try {
-    const [statsData, trendsData, feedbacksData, agentsData] = await Promise.all([
+    const [statsRes, trendsRes, feedbacksData, agentsData] = await Promise.all([
       dashboardApi.getStats(),
       dashboardApi.getTrends(7),
       fetch('/api/dashboard/recent-feedbacks').then(r => r.json()),
       fetch('/api/dashboard/top-agents').then(r => r.json()),
     ])
-    stats.value = statsData
-    trends.value = trendsData
+    stats.value = statsRes as DashboardStats
+    trends.value = trendsRes as DashboardTrends
     recentFeedbacks.value = feedbacksData
     topAgents.value = agentsData
   } catch (e) {
