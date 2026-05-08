@@ -319,7 +319,12 @@ async def _analyze_skill_with_ai(code_contents: dict, config_data: dict) -> dict
             messages=[{"role": "user", "content": prompt}]
         )
 
-        result_text = response.content[0].text.strip()
+        # 遍历响应内容，跳过 ThinkingBlock，只提取 text
+        result_text = ""
+        for block in response.content:
+            if hasattr(block, 'text'):
+                result_text += block.text
+        result_text = result_text.strip()
         # 尝试解析 JSON - 可能被 markdown 代码块包裹
         json_text = result_text
         if '```json' in result_text:
@@ -951,6 +956,7 @@ async def download_skill(skill_id: str, db: Session = Depends(get_db)):
     下载技能为 ZIP 压缩包
     """
     from fastapi.responses import StreamingResponse
+    from urllib.parse import quote
     import io
 
     skill = db.query(Skill).filter(Skill.id == skill_id).first()
@@ -964,25 +970,41 @@ async def download_skill(skill_id: str, db: Session = Depends(get_db)):
     if not skill_folder.exists():
         raise HTTPException(status_code=404, detail="技能文件夹不存在")
 
-    # 创建内存中的 ZIP 文件
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        for file_path in skill_folder.rglob("*"):
-            if file_path.is_file():
-                rel_path = file_path.relative_to(skill_folder)
-                zip_file.write(file_path, rel_path)
+    try:
+        # 创建内存中的 ZIP 文件
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            for file_path in skill_folder.rglob("*"):
+                if file_path.is_file():
+                    # 跳过 __pycache__ 目录
+                    if '__pycache__' in str(file_path):
+                        continue
+                    rel_path = file_path.relative_to(skill_folder)
+                    zip_file.write(file_path, rel_path)
 
-    zip_buffer.seek(0)
+        zip_buffer.seek(0)
 
-    # 生成文件名
-    safe_name = skill.name.replace(" ", "_").replace("/", "_")
-    filename = f"{safe_name}_v{skill.version}.zip"
+        # 生成文件名（处理中文字符）
+        safe_name = skill.name.replace(" ", "_").replace("/", "_")
+        version = skill.version or "1.0.0"
+        filename = f"{safe_name}_v{version}.zip"
 
-    return StreamingResponse(
-        zip_buffer,
-        media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
-    )
+        # RFC 5987 编码处理中文文件名
+        filename_encoded = quote(filename, safe='')
+
+        return StreamingResponse(
+            zip_buffer,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{filename_encoded}",
+                "Content-Type": "application/zip"
+            }
+        )
+    except Exception as e:
+        print(f"[Download] 下载技能失败: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"下载失败: {str(e)}")
 
 
 # ============ 代码格式转换 ============

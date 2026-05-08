@@ -1,5 +1,6 @@
 /**
  * Auth Store - Admin 认证状态管理
+ * 使用 Cookie 实现 SSO 单点登录
  */
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
@@ -30,20 +31,49 @@ interface LoginResponse {
 const TOKEN_KEY = 'auth_token'
 const USER_KEY = 'auth_user'
 
+// ============ Cookie 工具函数 (SSO) ============
+
+// Cookie 配置
+const COOKIE_OPTIONS = {
+  path: '/',
+  maxAge: 30 * 60,  // 30 分钟，与 JWT 过期时间一致
+  sameSite: 'lax' as const,
+}
+
+// 设置 Cookie
+function setCookie(name: string, value: string, options = COOKIE_OPTIONS) {
+  const parts = [`${name}=${encodeURIComponent(value)}`]
+  if (options.path) parts.push(`path=${options.path}`)
+  if (options.maxAge) parts.push(`max-age=${options.maxAge}`)
+  if (options.sameSite) parts.push(`SameSite=${options.sameSite}`)
+  document.cookie = parts.join('; ')
+}
+
+// 获取 Cookie
+export function getCookie(name: string): string | null {
+  const match = document.cookie.match(new RegExp(`(^| )${name}=([^;]+)`))
+  return match ? decodeURIComponent(match[2]) : null
+}
+
+// 删除 Cookie
+function deleteCookie(name: string) {
+  document.cookie = `${name}=; path=/; max-age=0`
+}
+
 export const useAuthStore = defineStore('auth', () => {
-  // 状态
-  const token = ref<string | null>(localStorage.getItem(TOKEN_KEY))
+  // 状态 - 从 Cookie 读取 token (SSO)
+  const token = ref<string | null>(getCookie(TOKEN_KEY))
   const user = ref<User | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
 
-  // 初始化时从 localStorage 恢复用户信息
-  const savedUser = localStorage.getItem(USER_KEY)
+  // 初始化时从 Cookie 恢复用户信息
+  const savedUser = getCookie(USER_KEY)
   if (savedUser) {
     try {
       user.value = JSON.parse(savedUser)
     } catch (e) {
-      localStorage.removeItem(USER_KEY)
+      deleteCookie(USER_KEY)
     }
   }
 
@@ -78,11 +108,11 @@ export const useAuthStore = defineStore('auth', () => {
         throw new Error('您没有管理后台访问权限')
       }
 
-      // 保存 token 和用户信息
+      // 保存 token 和用户信息到 Cookie (SSO)
       token.value = data.access_token
       user.value = data.user
-      localStorage.setItem(TOKEN_KEY, data.access_token)
-      localStorage.setItem(USER_KEY, JSON.stringify(data.user))
+      setCookie(TOKEN_KEY, data.access_token)
+      setCookie(USER_KEY, JSON.stringify(data.user))
 
       return true
     } catch (e: any) {
@@ -105,10 +135,11 @@ export const useAuthStore = defineStore('auth', () => {
         }).catch(() => {})
       }
     } finally {
+      // 清除 Cookie 状态 (SSO)
       token.value = null
       user.value = null
-      localStorage.removeItem(TOKEN_KEY)
-      localStorage.removeItem(USER_KEY)
+      deleteCookie(TOKEN_KEY)
+      deleteCookie(USER_KEY)
     }
   }
 
@@ -139,7 +170,7 @@ export const useAuthStore = defineStore('auth', () => {
       }
 
       user.value = userData
-      localStorage.setItem(USER_KEY, JSON.stringify(userData))
+      setCookie(USER_KEY, JSON.stringify(userData))
       return true
     } catch (e) {
       await logout()

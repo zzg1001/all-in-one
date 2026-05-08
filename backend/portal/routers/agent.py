@@ -15,6 +15,7 @@ from portal.schemas.agent import (
     AgentLoopRequest, ToolCall
 )
 from portal.services.agent_service_sdk import AgentSDKService
+from portal.services.agent_service_factory import get_agent_service
 from portal.services.file_generator import generate_output_file
 from portal.routers.logs import (
     log_info, log_error,
@@ -180,7 +181,8 @@ async def chat_stream(
    - 告知用户未找到相关数据
    - 建议用户先在 File Manage 中上传相关文件"""
 
-    service = AgentSDKService(db)
+    # 使用工厂方法获取合适的服务（根据模型配置自动选择 Claude SDK / OpenAI SDK / LiteLLM）
+    service = get_agent_service(db)
 
     # 调试日志
     print(f"\n[/chat/stream] ========== 请求信息 ==========")

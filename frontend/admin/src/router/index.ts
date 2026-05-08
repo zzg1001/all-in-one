@@ -90,9 +90,16 @@ const router = createRouter({
   ]
 })
 
+// Cookie 读取函数 (SSO)
+function getCookie(name: string): string | null {
+  const match = document.cookie.match(new RegExp(`(^| )${name}=([^;]+)`))
+  return match ? decodeURIComponent(match[2]) : null
+}
+
 // 路由守卫
 router.beforeEach(async (to, _from, next) => {
-  const token = localStorage.getItem('auth_token')
+  // 获取 token - 从 Cookie 读取 (SSO)
+  const token = getCookie('auth_token')
   const isAuthenticated = !!token
 
   // 如果是登录页且已登录，跳转到首页

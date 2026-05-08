@@ -3,9 +3,17 @@ import config from '@/config'
 
 const API_BASE_URL = config.apiBaseUrl
 
-// 获取 token
+// ============ Cookie 工具函数 (SSO) ============
+
+// 获取 Cookie
+function getCookie(name: string): string | null {
+  const match = document.cookie.match(new RegExp(`(^| )${name}=([^;]+)`))
+  return match ? decodeURIComponent(match[2]) : null
+}
+
+// 获取 token - 从 Cookie 读取 (SSO)
 function getAuthToken(): string | null {
-  return localStorage.getItem('auth_token')
+  return getCookie('auth_token')
 }
 
 // Generic fetch wrapper
@@ -247,6 +255,7 @@ export interface CCConfig {
   id: string
   name: string
   description?: string
+  api_type?: 'claude_sdk'  // API 类型：Claude Agent SDK
   model_id: string
   api_key: string
   base_url?: string
@@ -263,6 +272,7 @@ export interface CCConfig {
 export interface CCConfigCreate {
   name: string
   description?: string
+  api_type?: 'claude_sdk'
   model_id: string
   api_key: string
   base_url?: string
@@ -296,6 +306,10 @@ export const ccswitchApi = {
   }),
   delete: (id: string) => request<void>(`/ccswitch/${id}`, { method: 'DELETE' }),
   test: (id: string) => request<TestResult>(`/ccswitch/${id}/test`, { method: 'POST' }),
+  testDirect: (data: CCConfigCreate) => request<TestResult>('/ccswitch/test-direct', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
   toggle: (id: string) => request<{ id: string; is_active: boolean; message: string }>(`/ccswitch/${id}/toggle`, { method: 'POST' }),
   copy: (id: string) => request<CCConfig>(`/ccswitch/${id}/copy`, { method: 'POST' }),
   export: (id: string) => request<CCConfig>(`/ccswitch/${id}/export`),
@@ -502,7 +516,7 @@ export const skillsApi = {
     const formData = new FormData()
     formData.append('file', file)
 
-    const token = localStorage.getItem('auth_token')
+    const token = getAuthToken()
     const response = await fetch(`${config.apiBaseUrl}/skills/upload/preview`, {
       method: 'POST',
       headers: token ? { 'Authorization': `Bearer ${token}` } : {},
@@ -528,7 +542,7 @@ export const skillsApi = {
     if (data.version) formData.append('version', data.version)
     if (data.entry_script) formData.append('entry_script', data.entry_script)
 
-    const token = localStorage.getItem('auth_token')
+    const token = getAuthToken()
     const response = await fetch(`${config.apiBaseUrl}/skills/upload`, {
       method: 'POST',
       headers: token ? { 'Authorization': `Bearer ${token}` } : {},
@@ -544,22 +558,39 @@ export const skillsApi = {
   },
 
   // 下载技能
-  download: (id: string, filename: string) => {
-    const token = localStorage.getItem('auth_token')
+  download: async (id: string, filename: string) => {
+    const token = getAuthToken()
     const url = `${config.apiBaseUrl}/skills/${id}/download`
 
-    // 使用隐藏的 a 标签触发下载
-    fetch(url, {
-      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
-    })
-      .then(res => res.blob())
-      .then(blob => {
-        const a = document.createElement('a')
-        a.href = URL.createObjectURL(blob)
-        a.download = filename
-        a.click()
-        URL.revokeObjectURL(a.href)
+    try {
+      const res = await fetch(url, {
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {},
       })
+
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({ detail: '下载失败' }))
+        throw new Error(error.detail || `下载失败: ${res.status}`)
+      }
+
+      const blob = await res.blob()
+
+      // 检查 blob 是否有效
+      if (blob.size === 0) {
+        throw new Error('下载的文件为空')
+      }
+
+      // 使用隐藏的 a 标签触发下载
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(a.href)
+    } catch (error) {
+      console.error('下载失败:', error)
+      throw error
+    }
   },
 
   // 删除技能

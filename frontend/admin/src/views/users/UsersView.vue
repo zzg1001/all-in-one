@@ -3,6 +3,12 @@ import { ref, onMounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { authApi } from '@/api'
 
+// Cookie 读取函数 (SSO)
+function getCookie(name: string): string | null {
+  const match = document.cookie.match(new RegExp(`(^| )${name}=([^;]+)`))
+  return match ? decodeURIComponent(match[2]) : null
+}
+
 const route = useRoute()
 const router = useRouter()
 
@@ -136,7 +142,7 @@ const stats = computed(() => ({
 // 加载数据
 const loadUsers = async () => {
   loading.value = true
-  const token = localStorage.getItem('auth_token')
+  const token = getCookie('auth_token')
   console.log('loadUsers - token:', token ? '存在' : '不存在')
 
   try {
@@ -201,7 +207,7 @@ const saveUser = async () => {
       method,
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+        'Authorization': `Bearer ${getCookie('auth_token')}`,
       },
       body: JSON.stringify(editingUser.value),
     })
@@ -226,7 +232,7 @@ const deleteUser = async (user: User) => {
     const response = await fetch(`/api/users/${user.id}`, {
       method: 'DELETE',
       headers: {
-        'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+        'Authorization': `Bearer ${getCookie('auth_token')}`,
       },
     })
 
@@ -247,7 +253,7 @@ const toggleStatus = async (user: User) => {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+        'Authorization': `Bearer ${getCookie('auth_token')}`,
       },
       body: JSON.stringify({ is_active: !user.is_active }),
     })
@@ -275,7 +281,7 @@ const resetPassword = async () => {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+        'Authorization': `Bearer ${getCookie('auth_token')}`,
       },
       body: JSON.stringify({ new_password: newPassword.value }),
     })

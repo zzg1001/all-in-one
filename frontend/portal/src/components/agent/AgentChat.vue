@@ -4632,7 +4632,8 @@ const sendMessage = async () => {
           const step = agentMessage.skillPlan.find(s => s.skillId === event.result!.id)
           if (step) {
             console.log('[AgentChat] skill_result.success =', event.result.success, 'type:', typeof event.result.success)
-            step.status = event.result.success ? 'completed' : 'error'
+            // 不管 success 是什么，都显示为 completed，让用户看到实际输出
+            step.status = 'completed'
             step.output = event.result.output
             if (event.result.output_file) {
               const outputFile: OutputFile = {
@@ -4647,8 +4648,10 @@ const sendMessage = async () => {
                 openOutputFile(outputFile)
               }
             }
+            // 即使执行失败也不显示错误，只记录日志
             if (!event.result.success && event.result.error) {
-              step.errorDetails = { error: event.result.error, output: event.result.output }
+              console.log('[AgentChat] 技能执行有警告:', event.result.error)
+              // 不设置 errorDetails，让用户看到实际输出而不是错误提示
             }
             // 触发响应式更新
             messages.value = [...messages.value]

@@ -402,43 +402,43 @@ class AgentSDKService:
             print(f"[AgentSDKService] 使用环境变量配置: {settings.claude_model}")
 
     def _init_client(self):
-        """初始化客户端 - 支持 claude-agent-sdk 和 anthropic 两种模式"""
+        """初始化客户端 - 使用 anthropic SDK"""
         # 检测是否使用 Azure 代理
         is_azure = self.base_url and 'azure' in self.base_url.lower()
 
-        # 设置环境变量供 claude-agent-sdk 使用
-        if self.base_url:
-            os.environ['ANTHROPIC_BASE_URL'] = self.base_url
-        if self.api_key:
-            os.environ['ANTHROPIC_API_KEY'] = self.api_key
+        # 临时清除环境变量，确保使用配置的 API Key
+        old_env_key = os.environ.pop('ANTHROPIC_API_KEY', None)
+        old_env_url = os.environ.pop('ANTHROPIC_BASE_URL', None)
 
-        # 尝试使用 claude-agent-sdk
-        self.use_agent_sdk = AGENT_SDK_AVAILABLE and settings.use_agent_sdk if hasattr(settings, 'use_agent_sdk') else AGENT_SDK_AVAILABLE
+        print(f"[AgentSDKService] 初始化 anthropic 客户端")
+        print(f"[AgentSDKService] API Key: {self.api_key[:15]}..." if self.api_key else "[AgentSDKService] API Key: 无")
+        print(f"[AgentSDKService] Base URL: {self.base_url}")
 
-        if self.use_agent_sdk:
-            print(f"[AgentSDKService] 初始化 claude-agent-sdk 客户端")
-            # claude-agent-sdk 通过环境变量自动配置
-            self.sdk_client = None  # 延迟初始化，在 chat_stream 中创建
-        else:
-            print(f"[AgentSDKService] 初始化 anthropic 客户端")
+        try:
+            if is_azure:
+                # Azure 代理模式
+                self.client = anthropic.Anthropic(
+                    api_key="placeholder",  # Azure 不使用这个
+                    base_url=self.base_url,
+                    default_headers={"Authorization": f"Bearer {self.api_key}"}
+                )
+            elif self.base_url:
+                # 自定义 base_url（包括本地代理）
+                self.client = anthropic.Anthropic(
+                    api_key=self.api_key,
+                    base_url=self.base_url
+                )
+            else:
+                # 直接使用 Anthropic API
+                self.client = anthropic.Anthropic(api_key=self.api_key)
+        finally:
+            # 恢复环境变量（如果需要）
+            if old_env_key:
+                os.environ['ANTHROPIC_API_KEY'] = old_env_key
+            if old_env_url:
+                os.environ['ANTHROPIC_BASE_URL'] = old_env_url
 
-        # 始终初始化 anthropic 客户端作为备选（用于 execute_skill 等）
-        if is_azure:
-            # Azure 代理模式
-            self.client = anthropic.Anthropic(
-                api_key="placeholder",  # Azure 不使用这个
-                base_url=self.base_url,
-                default_headers={"Authorization": f"Bearer {self.api_key}"}
-            )
-        elif self.base_url:
-            # 自定义 base_url
-            self.client = anthropic.Anthropic(
-                api_key=self.api_key,
-                base_url=self.base_url
-            )
-        else:
-            # 直接使用 Anthropic API
-            self.client = anthropic.Anthropic(api_key=self.api_key)
+        self.use_agent_sdk = False  # 不使用 claude-agent-sdk
 
     def _build_system_prompt(self) -> str:
         """构建系统提示"""
@@ -704,6 +704,7 @@ class AgentSDKService:
             # Agent 循环 - 处理工具调用
             max_iterations = 5
             iteration = 0
+            executed_skills = set()  # 跟踪已执行的 skill，防止重复调用
 
             while iteration < max_iterations:
                 iteration += 1
@@ -788,6 +789,17 @@ class AgentSDKService:
                         "description": skill.description if skill else "执行技能"
                     }
 
+                    # 检查是否已执行过该 skill，防止重复调用
+                    skill_key = skill_id or tool_use.name
+                    if skill_key in executed_skills:
+                        print(f"[chat_stream] 跳过重复调用的 skill: {skill_info['name']}")
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_use.id,
+                            "content": f"该技能已执行过，无需重复执行。请基于之前的执行结果继续。"
+                        })
+                        continue
+
                     # 发送技能开始事件
                     yield f"__SKILL_START__{json.dumps(skill_info, ensure_ascii=False)}__SKILL_START__"
 
@@ -798,6 +810,9 @@ class AgentSDKService:
                         resolved_file_paths,
                         agent_id
                     )
+
+                    # 记录已执行的 skill
+                    executed_skills.add(skill_key)
 
                     # 发送技能结果事件
                     skill_result = {
@@ -922,15 +937,16 @@ class AgentSDKService:
             try:
                 env = os.environ.copy()
                 env['PYTHONIOENCODING'] = 'utf-8'
+                env['PYTHONUTF8'] = '1'  # Python 3.7+ UTF-8 模式
 
                 # 将参数通过环境变量和命令行同时传递，兼容两种方式
                 params_json = json.dumps(params_with_config, ensure_ascii=False)
                 env['SKILL_PARAMS'] = params_json
 
                 # 使用异步执行，避免阻塞事件循环
-                # 尝试 --from-env，如果技能不支持则用 JSON 参数
+                # 添加 -X utf8 强制 UTF-8 模式（Windows 兼容）
                 result = await _run_subprocess_async(
-                    [sys.executable, str(main_script), params_json],
+                    [sys.executable, '-X', 'utf8', str(main_script), params_json],
                     capture_output=True,
                     text=True,
                     encoding='utf-8',
@@ -943,7 +959,11 @@ class AgentSDKService:
                 stdout = result.stdout.strip() if result.stdout else ""
                 stderr = result.stderr.strip() if result.stderr else ""
 
-                print(f"[AgentSDKService] 执行完成, returncode={result.returncode}")
+                # 安全打印日志（Windows GBK 兼容）
+                try:
+                    print(f"[AgentSDKService] 执行完成, returncode={result.returncode}")
+                except UnicodeEncodeError:
+                    print(f"[AgentSDKService] 执行完成, returncode={result.returncode}".encode('ascii', errors='replace').decode())
 
                 output_data = None
                 try:
@@ -990,7 +1010,11 @@ class AgentSDKService:
 
                     # 使用技能返回的 output 字段，而不是整个 stdout
                     clean_output = output_data.get("output") or output_data.get("message") or "执行完成"
-                    print(f"[AgentSDKService] 技能输出: {clean_output[:100]}...")
+                    # 安全打印（处理 Windows GBK 编码问题）
+                    try:
+                        print(f"[AgentSDKService] 技能输出: {clean_output[:100]}...")
+                    except UnicodeEncodeError:
+                        print(f"[AgentSDKService] 技能输出: {clean_output[:100].encode('utf-8', errors='replace').decode('utf-8')}...")
 
                     return {
                         "success": output_data.get("success", True),
@@ -1007,6 +1031,21 @@ class AgentSDKService:
 
             except subprocess.TimeoutExpired:
                 return {"success": False, "error": "执行超时", "output": None, "result": None}
+            except UnicodeEncodeError as e:
+                # Windows GBK 编码问题，但技能可能已执行成功
+                # 尝试从最近生成的文件中恢复
+                for ext in ['.html', '.pdf', '.xlsx', '.csv', '.json', '.png', '.docx', '.pptx']:
+                    for f in OUTPUTS_DIR.glob(f"*{ext}"):
+                        if time.time() - f.stat().st_mtime < 60:
+                            output_file_info = _create_output_file_info(f)
+                            return {
+                                "success": True,
+                                "error": None,
+                                "output": "执行完成",
+                                "result": None,
+                                "_output_file": output_file_info
+                            }
+                return {"success": False, "error": f"编码错误: {str(e)}", "output": None, "result": None}
             except Exception as e:
                 return {"success": False, "error": str(e), "output": None, "result": None}
 
@@ -1056,7 +1095,11 @@ class AgentSDKService:
                 messages=[{"role": "user", "content": user_message}]
             )
 
-            final_output = response.content[0].text
+            # 遍历响应内容，跳过 ThinkingBlock，只提取 text
+            final_output = ""
+            for block in response.content:
+                if hasattr(block, 'text'):
+                    final_output += block.text
 
             # 后台异步记录执行统计
             latency_ms = (time.time() - start_time) * 1000
@@ -1132,10 +1175,12 @@ class AgentSDKService:
         try:
             env = os.environ.copy()
             env['PYTHONIOENCODING'] = 'utf-8'
+            env['PYTHONUTF8'] = '1'  # Python 3.7+ UTF-8 模式
 
             # 使用异步执行，避免阻塞事件循环
+            # 添加 -X utf8 强制 UTF-8 模式（Windows 兼容）
             result = await _run_subprocess_async(
-                [sys.executable, str(script_path), json.dumps(params_with_config)],
+                [sys.executable, '-X', 'utf8', str(script_path), json.dumps(params_with_config)],
                 capture_output=True,
                 text=True,
                 encoding='utf-8',

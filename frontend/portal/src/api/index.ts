@@ -3,9 +3,17 @@ import config from '@/config'
 
 const API_BASE_URL = config.apiBaseUrl
 
-// 获取存储的 token
+// ============ Cookie 工具函数 (SSO) ============
+
+// 获取 Cookie
+function getCookie(name: string): string | null {
+  const match = document.cookie.match(new RegExp(`(^| )${name}=([^;]+)`))
+  return match ? decodeURIComponent(match[2]) : null
+}
+
+// 获取存储的 token - 从 Cookie 读取 (SSO)
 const getAuthToken = (): string | null => {
-  return localStorage.getItem('auth_token')
+  return getCookie('auth_token')
 }
 
 // Generic fetch wrapper
@@ -1105,8 +1113,28 @@ export interface FavoriteListResponse {
   workflows: string[]  // 收藏的子流程ID列表
 }
 
-// 获取或生成用户ID（匿名用户使用本地存储的ID）
+// 获取 Cookie
+function getCookieValue(name: string): string | null {
+  const match = document.cookie.match(new RegExp(`(^| )${name}=([^;]+)`))
+  return match ? decodeURIComponent(match[2]) : null
+}
+
+// 获取用户ID - 优先使用登录用户ID，否则使用匿名ID
 const getUserId = (): string => {
+  // 优先从 Cookie 获取登录用户 ID (SSO)
+  try {
+    const authUser = getCookieValue('auth_user')
+    if (authUser) {
+      const user = JSON.parse(authUser)
+      if (user && user.id) {
+        return user.id
+      }
+    }
+  } catch (e) {
+    // 解析失败，继续使用匿名 ID
+  }
+
+  // 回退到匿名 ID
   const key = 'user-anonymous-id'
   let userId = localStorage.getItem(key)
   if (!userId) {

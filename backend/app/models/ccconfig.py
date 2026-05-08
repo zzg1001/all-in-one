@@ -15,7 +15,8 @@ class CCConfig(Base):
     id = Column(String(36), primary_key=True)
     name = Column(String(100), nullable=False, comment="配置名称")
     description = Column(String(500), nullable=True, comment="配置描述")
-    model_id = Column(String(50), nullable=False, comment="模型ID: claude-opus-4-5, claude-sonnet-4")
+    api_type = Column(String(20), default="claude_sdk", comment="API类型: claude_sdk")
+    model_id = Column(String(50), nullable=False, comment="模型ID")
     api_key = Column(String(500), nullable=False, comment="API Key")
     base_url = Column(String(200), nullable=True, comment="自定义 Base URL")
     max_tokens = Column(Integer, default=4096, comment="最大 Token 数")
@@ -34,6 +35,7 @@ class CCConfig(Base):
             "id": self.id,
             "name": self.name,
             "description": self.description,
+            "api_type": self.api_type or "claude_sdk",
             "model_id": self.model_id,
             "api_key": self.api_key,
             "base_url": self.base_url,

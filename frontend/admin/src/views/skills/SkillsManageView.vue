@@ -51,8 +51,15 @@ const stats = computed(() => ({
 }))
 
 // 加载数据
-const loadSkills = async () => {
-  loading.value = true
+const loadSkills = async (showLoading = true) => {
+  // 清除选择状态
+  selectedIds.value.clear()
+
+  // 只有首次加载才显示 loading（页面为空时）
+  if (showLoading && skills.value.length === 0) {
+    loading.value = true
+  }
+
   try {
     skills.value = await skillsApi.getAll()
   } catch (e) {
@@ -170,7 +177,7 @@ const handleBatchFileSelect = async (e: Event) => {
 
   uploading.value = false
   toast.value?.success(`批量上传完成：${successCount}/${files.length} 个`)
-  loadSkills()
+  loadSkills(false)
   input.value = ''
 }
 
@@ -256,9 +263,15 @@ const handleCreate = async () => {
 }
 
 // 下载技能
-const downloadSkill = (skill: Skill) => {
+const downloadSkill = async (skill: Skill) => {
   const filename = `${skill.name.replace(/\s+/g, '_')}_v${skill.version || '1.0.0'}.zip`
-  skillsApi.download(skill.id, filename)
+  try {
+    await skillsApi.download(skill.id, filename)
+    toast.value?.success(`下载成功: ${skill.name}`)
+  } catch (e: any) {
+    console.error('下载失败:', e)
+    toast.value?.error(`下载失败: ${e.message || '未知错误'}`)
+  }
 }
 
 // 批量下载
@@ -330,16 +343,26 @@ const batchPush = async () => {
     return
   }
 
+  const total = selectedIds.value.size
   let successCount = 0
+
   for (const id of selectedIds.value) {
     try {
       await skillsApi.push(id)
+      // 更新本地状态
+      const idx = skills.value.findIndex(s => s.id === id)
+      if (idx !== -1) {
+        skills.value[idx] = { ...skills.value[idx], minio_synced: true }
+      }
       successCount++
     } catch (e) {
       console.error(`推送失败:`, e)
     }
   }
-  toast.value?.success(`推送完成：${successCount}/${selectedIds.value.size}`)
+
+  // 清除选择
+  selectedIds.value.clear()
+  toast.value?.success(`推送完成：${successCount}/${total}`)
 }
 
 // 从 MinIO 拉取全部
@@ -352,7 +375,7 @@ const syncAll = async () => {
   try {
     const result = await skillsApi.syncAll()
     toast.value?.success(result.message || '同步完成')
-    loadSkills()
+    loadSkills(false)
   } catch (e) {
     toast.value?.error('同步失败: ' + e)
   }
@@ -394,10 +417,11 @@ onMounted(() => {
         <button class="btn-icon" title="从 MinIO 拉取" @click="syncAll">
           <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/></svg>
         </button>
-        <button class="btn-icon" :disabled="selectedIds.size === 0" title="将选中的技能推送到 MinIO" @click="batchPush">
+        <button class="btn-push" :disabled="stats.selected === 0" @click="batchPush">
           <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clip-rule="evenodd"/></svg>
+          推送MinIO
+          <span v-if="stats.selected > 0" class="push-badge">{{ stats.selected }}</span>
         </button>
-        <span v-if="selectedIds.size > 0" class="selected-badge">{{ selectedIds.size }}</span>
         <button class="btn-add" @click="openCreateModal">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <path d="M12 5v14M5 12h14"/>
@@ -737,15 +761,46 @@ onMounted(() => {
   cursor: not-allowed;
 }
 
-.selected-badge {
-  background: #007aff;
+.btn-push {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  background: #34c759;
   color: white;
-  font-size: 11px;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-push:hover {
+  background: #2db84d;
+}
+
+.btn-push:active {
+  transform: scale(0.96);
+}
+
+.btn-push:disabled {
+  background: #a8e6b8;
+  cursor: not-allowed;
+}
+
+.btn-push svg {
+  width: 12px;
+  height: 12px;
+}
+
+.push-badge {
+  background: rgba(255,255,255,0.3);
+  font-size: 10px;
   font-weight: 600;
-  padding: 2px 6px;
-  border-radius: 10px;
-  min-width: 18px;
-  text-align: center;
+  padding: 1px 5px;
+  border-radius: 8px;
+  margin-left: 2px;
 }
 
 .btn-text {

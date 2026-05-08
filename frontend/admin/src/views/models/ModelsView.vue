@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import { ccswitchApi, type CCConfig } from '@/api'
 
 // 状态
@@ -13,7 +13,23 @@ const testResult = ref<{ success: boolean; message: string; latency_ms?: number 
 const importJson = ref('')
 const searchQuery = ref('')
 
-// 模型选项
+// 弹框内直接测试
+const testingDirect = ref(false)
+const testDirectResult = ref<{ success: boolean; message: string; latency_ms?: number } | null>(null)
+const testDirectPassed = ref(false)
+
+// 自定义模型输入
+const useCustomModel = ref(false)
+
+// API Key 显示/隐藏
+const showApiKey = ref(false)
+
+// API 类型选项 - 只使用 Claude Agent SDK
+const apiTypeOptions = [
+  { value: 'claude_sdk', label: 'Claude Agent SDK', description: '完整 Agent 能力，支持 Bash/Read/Write/Edit 等工具' },
+]
+
+// 模型选项（根据 API 类型动态调整）
 const modelOptions = [
   { value: 'claude-opus-4-5', label: 'Claude Opus 4.5' },
   { value: 'claude-sonnet-4', label: 'Claude Sonnet 4' },
@@ -54,12 +70,22 @@ const loadConfigs = async () => {
 
 // 打开编辑弹框
 const openEdit = (config?: CCConfig) => {
+  // 重置测试状态
+  testingDirect.value = false
+  testDirectResult.value = null
+  testDirectPassed.value = !!config  // 编辑现有配置时默认允许保存
+  showApiKey.value = false  // 重置 API Key 显示状态
+
   if (config) {
     editingConfig.value = { ...config }
+    // 判断是否是自定义模型
+    const claudeModels = ['claude-opus-4-5', 'claude-sonnet-4', 'claude-haiku-3']
+    useCustomModel.value = !claudeModels.includes(config.model_id)
   } else {
     editingConfig.value = {
       name: '',
       description: '',
+      api_type: 'claude_sdk',
       model_id: 'claude-opus-4-5',
       api_key: '',
       base_url: '',
@@ -68,9 +94,40 @@ const openEdit = (config?: CCConfig) => {
       top_p: 1.0,
       system_prompt: '',
     }
+    useCustomModel.value = false
   }
   showEditModal.value = true
 }
+
+// 弹框内直接测试配置
+const testConfigDirect = async () => {
+  if (!editingConfig.value) return
+  testingDirect.value = true
+  testDirectResult.value = null
+  testDirectPassed.value = false
+
+  try {
+    const result = await ccswitchApi.testDirect(editingConfig.value as any)
+    testDirectResult.value = result
+    testDirectPassed.value = result.success
+  } catch (e: any) {
+    testDirectResult.value = { success: false, message: e.message || '测试失败' }
+    testDirectPassed.value = false
+  } finally {
+    testingDirect.value = false
+  }
+}
+
+
+// 监听模型选择，处理自定义选项
+watch(() => editingConfig.value?.model_id, (newVal) => {
+  if (newVal === '__custom__') {
+    useCustomModel.value = true
+    if (editingConfig.value) {
+      editingConfig.value.model_id = ''
+    }
+  }
+})
 
 // 保存配置
 const saveConfig = async () => {
@@ -323,8 +380,18 @@ onMounted(loadConfigs)
 
             <div class="config-info">
               <div class="info-row">
+                <span class="info-label">API 类型</span>
+                <span class="info-value api-type-tag" :class="config.api_type || 'anthropic'">
+                  {{ apiTypeOptions.find(o => o.value === (config.api_type || 'anthropic'))?.label }}
+                </span>
+              </div>
+              <div class="info-row">
                 <span class="info-label">模型</span>
                 <span class="info-value model-tag">{{ config.model_id }}</span>
+              </div>
+              <div class="info-row" v-if="config.api_type === 'openai' && config.base_url">
+                <span class="info-label">Base URL</span>
+                <span class="info-value url-value" :title="config.base_url">{{ config.base_url }}</span>
               </div>
               <div class="info-row">
                 <span class="info-label">Max Tokens</span>
@@ -387,6 +454,7 @@ onMounted(loadConfigs)
           </div>
           <div class="modal-body">
             <div class="form-grid">
+              <!-- 通用配置 -->
               <div class="form-group full">
                 <label>配置名称 <span class="required">*</span></label>
                 <input v-model="editingConfig!.name" type="text" placeholder="例如：生产环境配置" />
@@ -395,30 +463,78 @@ onMounted(loadConfigs)
                 <label>描述</label>
                 <input v-model="editingConfig!.description" type="text" placeholder="配置用途说明" />
               </div>
-              <div class="form-group">
-                <label>模型 <span class="required">*</span></label>
-                <select v-model="editingConfig!.model_id">
-                  <option v-for="opt in modelOptions" :key="opt.value" :value="opt.value">
-                    {{ opt.label }}
-                  </option>
-                </select>
-              </div>
-              <div class="form-group">
-                <label>Base URL</label>
-                <input v-model="editingConfig!.base_url" type="text" placeholder="留空使用默认" />
-              </div>
+
+              <!-- API 类型选择 -->
               <div class="form-group full">
-                <label>API Key <span class="required">*</span></label>
-                <input v-model="editingConfig!.api_key" type="password" placeholder="sk-ant-..." />
+                <label>API 类型 <span class="required">*</span></label>
+                <div class="api-type-cards">
+                  <div
+                    v-for="opt in apiTypeOptions"
+                    :key="opt.value"
+                    class="api-type-card"
+                    :class="{ active: editingConfig!.api_type === opt.value }"
+                    @click="editingConfig!.api_type = opt.value"
+                  >
+                    <div class="api-type-label">{{ opt.label }}</div>
+                    <div class="api-type-desc">{{ opt.description }}</div>
+                  </div>
+                </div>
               </div>
-              <div class="form-group">
-                <label>Max Tokens</label>
-                <input v-model.number="editingConfig!.max_tokens" type="number" />
-              </div>
-              <div class="form-group">
-                <label>Temperature</label>
-                <input v-model.number="editingConfig!.temperature" type="number" step="0.1" min="0" max="2" />
-              </div>
+
+              <!-- 模型配置 -->
+                <div class="form-group">
+                  <label>模型 <span class="required">*</span></label>
+                  <select v-model="editingConfig!.model_id" v-if="!useCustomModel">
+                    <option value="claude-opus-4-5">Claude Opus 4.5</option>
+                    <option value="claude-sonnet-4">Claude Sonnet 4</option>
+                    <option value="claude-haiku-3">Claude Haiku 3</option>
+                    <option value="__custom__">自定义模型...</option>
+                  </select>
+                  <input v-else v-model="editingConfig!.model_id" type="text" placeholder="ollama/qwen3.5:9b" />
+                  <span class="form-hint">
+                    <a v-if="!useCustomModel" href="#" @click.prevent="useCustomModel = true">切换到手动输入</a>
+                    <a v-else href="#" @click.prevent="useCustomModel = false; editingConfig!.model_id = 'claude-opus-4-5'">切换到下拉选择</a>
+                  </span>
+                </div>
+                <div class="form-group">
+                  <label>Base URL</label>
+                  <input v-model="editingConfig!.base_url" type="text" placeholder="留空使用默认 Anthropic API" />
+                  <span class="form-hint">如使用 Azure 代理，填写代理地址</span>
+                </div>
+                <div class="form-group full">
+                  <label>API Key <span class="required">*</span></label>
+                  <div class="input-with-toggle">
+                    <input
+                      v-model="editingConfig!.api_key"
+                      :type="showApiKey ? 'text' : 'password'"
+                      placeholder="sk-ant-..."
+                    />
+                    <button type="button" class="toggle-btn" @click="showApiKey = !showApiKey">
+                      <svg v-if="showApiKey" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M10 12a2 2 0 100-4 2 2 0 000 4z"/>
+                        <path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd"/>
+                      </svg>
+                      <svg v-else viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M3.707 2.293a1 1 0 00-1.414 1.414l14 14a1 1 0 001.414-1.414l-1.473-1.473A10.014 10.014 0 0019.542 10C18.268 5.943 14.478 3 10 3a9.958 9.958 0 00-4.512 1.074l-1.78-1.781zm4.261 4.26l1.514 1.515a2.003 2.003 0 012.45 2.45l1.514 1.514a4 4 0 00-5.478-5.478z" clip-rule="evenodd"/>
+                        <path d="M12.454 16.697L9.75 13.992a4 4 0 01-3.742-3.741L2.335 6.578A9.98 9.98 0 00.458 10c1.274 4.057 5.065 7 9.542 7 .847 0 1.669-.105 2.454-.303z"/>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label>Max Tokens</label>
+                  <input v-model.number="editingConfig!.max_tokens" type="number" placeholder="4096" />
+                </div>
+                <div class="form-group">
+                  <label>Temperature</label>
+                  <input v-model.number="editingConfig!.temperature" type="number" step="0.1" min="0" max="2" placeholder="0.7" />
+                </div>
+                <div class="form-group">
+                  <label>Top P</label>
+                  <input v-model.number="editingConfig!.top_p" type="number" step="0.1" min="0" max="1" placeholder="1.0" />
+                </div>
+
+              <!-- 通用：System Prompt -->
               <div class="form-group full">
                 <label>System Prompt</label>
                 <textarea v-model="editingConfig!.system_prompt" rows="3" placeholder="系统提示词（可选）"></textarea>
@@ -427,7 +543,17 @@ onMounted(loadConfigs)
           </div>
           <div class="modal-footer">
             <button class="btn-secondary" @click="showEditModal = false">取消</button>
-            <button class="btn-primary" @click="saveConfig">保存</button>
+            <button class="btn-test-modal" @click="testConfigDirect" :disabled="testingDirect">
+              <svg v-if="testingDirect" class="spinning" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/>
+              </svg>
+              {{ testingDirect ? '测试中...' : '测试连接' }}
+            </button>
+            <button class="btn-primary" @click="saveConfig" :disabled="!testDirectPassed">保存</button>
+          </div>
+          <div v-if="testDirectResult" class="test-direct-result" :class="testDirectResult.success ? 'success' : 'error'">
+            {{ testDirectResult.message }}
+            <span v-if="testDirectResult.latency_ms" class="latency">{{ testDirectResult.latency_ms }}ms</span>
           </div>
         </div>
       </div>
@@ -837,6 +963,151 @@ onMounted(loadConfigs)
   font-size: 11px;
 }
 
+.info-value.url-value {
+  font-size: 11px;
+  color: #6b7280;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.info-value.api-type-tag {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.info-value.api-type-tag.anthropic {
+  background: #fef3c7;
+  color: #d97706;
+}
+
+.info-value.api-type-tag.openai {
+  background: #ecfdf5;
+  color: #059669;
+}
+
+.info-value.api-type-tag.litellm {
+  background: #ede9fe;
+  color: #7c3aed;
+}
+
+.form-hint {
+  font-size: 11px;
+  color: #9ca3af;
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+/* API 类型选择卡片 */
+.api-type-cards {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.api-type-card {
+  flex: 1;
+  min-width: 150px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 2px solid #e5e7eb;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: white;
+}
+
+.api-type-card:hover {
+  border-color: #d1d5db;
+  background: #f9fafb;
+}
+
+.api-type-card.active {
+  border-color: #1677ff;
+  background: #eff6ff;
+}
+
+.api-type-card .card-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.api-type-card .card-icon.anthropic {
+  background: #fef3c7;
+  color: #d97706;
+}
+
+.api-type-card .card-icon.openai {
+  background: #ecfdf5;
+  color: #059669;
+}
+
+.api-type-card .card-icon.litellm {
+  background: #ede9fe;
+  color: #7c3aed;
+}
+
+.api-type-card .card-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.api-type-label {
+  font-weight: 600;
+  font-size: 14px;
+  color: #1f2937;
+}
+
+.api-type-desc {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 2px;
+}
+
+.api-type-card .card-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2937;
+  margin-bottom: 2px;
+}
+
+.api-type-card .card-desc {
+  font-size: 11px;
+  color: #6b7280;
+  line-height: 1.3;
+}
+
+/* 表单分组标题 */
+.form-section {
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid #f3f4f6;
+}
+
+.form-section .section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2937;
+  margin-bottom: 4px;
+}
+
+.form-section .section-desc {
+  font-size: 12px;
+  color: #6b7280;
+}
+
 .card-footer {
   display: flex;
   gap: 8px;
@@ -1095,5 +1366,103 @@ onMounted(loadConfigs)
   .form-group.full {
     grid-column: 1;
   }
+}
+
+/* 弹框内测试按钮 */
+.btn-test-modal {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 1px solid #10b981;
+  background: white;
+  color: #10b981;
+}
+
+.btn-test-modal:hover:not(:disabled) {
+  background: #ecfdf5;
+}
+
+.btn-test-modal:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-test-modal svg {
+  width: 14px;
+  height: 14px;
+}
+
+.btn-test-modal svg.spinning {
+  animation: spin 1s linear infinite;
+}
+
+/* 弹框内测试结果 */
+.test-direct-result {
+  margin-top: 12px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.test-direct-result.success {
+  background: #ecfdf5;
+  color: #059669;
+}
+
+.test-direct-result.error {
+  background: #fef2f2;
+  color: #ef4444;
+}
+
+.test-direct-result .latency {
+  margin-left: auto;
+  opacity: 0.7;
+}
+
+/* API Key 输入框带切换按钮 */
+.input-with-toggle {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.input-with-toggle input {
+  flex: 1;
+  padding-right: 40px;
+}
+
+.input-with-toggle .toggle-btn {
+  position: absolute;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: #9ca3af;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.input-with-toggle .toggle-btn:hover {
+  background: #f3f4f6;
+  color: #1677ff;
+}
+
+.input-with-toggle .toggle-btn svg {
+  width: 18px;
+  height: 18px;
 }
 </style>
