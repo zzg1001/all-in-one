@@ -60,7 +60,7 @@ const modelOptions = [
 async function fetchConfigs() {
   loading.value = true
   try {
-    const res = await fetch(`${API_BASE}/api/proxy/configs`)
+    const res = await fetch(`${API_BASE}/proxy/configs`)
     if (res.ok) {
       configs.value = await res.json()
     }
@@ -73,7 +73,7 @@ async function fetchConfigs() {
 
 async function fetchStatus() {
   try {
-    const res = await fetch(`${API_BASE}/api/proxy/status`)
+    const res = await fetch(`${API_BASE}/proxy/status`)
     if (res.ok) {
       status.value = await res.json()
     }
@@ -85,8 +85,8 @@ async function fetchStatus() {
 async function saveConfig() {
   try {
     const url = isEditing.value
-      ? `${API_BASE}/api/proxy/configs/${form.value.id}`
-      : `${API_BASE}/api/proxy/configs`
+      ? `${API_BASE}/proxy/configs/${form.value.id}`
+      : `${API_BASE}/proxy/configs`
     const method = isEditing.value ? 'PUT' : 'POST'
 
     const res = await fetch(url, {
@@ -111,7 +111,7 @@ async function saveConfig() {
 async function deleteConfig(config: ProxyConfig) {
   if (!confirm(`确定删除配置 "${config.name}"？`)) return
   try {
-    const res = await fetch(`${API_BASE}/api/proxy/configs/${config.id}`, {
+    const res = await fetch(`${API_BASE}/proxy/configs/${config.id}`, {
       method: 'DELETE',
     })
     if (res.ok) {
@@ -125,7 +125,7 @@ async function deleteConfig(config: ProxyConfig) {
 
 async function startProxy(config: ProxyConfig) {
   try {
-    const res = await fetch(`${API_BASE}/api/proxy/configs/${config.id}/start`, {
+    const res = await fetch(`${API_BASE}/proxy/configs/${config.id}/start`, {
       method: 'POST',
     })
     const data = await res.json()
@@ -143,7 +143,7 @@ async function startProxy(config: ProxyConfig) {
 
 async function stopProxy(config: ProxyConfig) {
   try {
-    const res = await fetch(`${API_BASE}/api/proxy/configs/${config.id}/stop`, {
+    const res = await fetch(`${API_BASE}/proxy/configs/${config.id}/stop`, {
       method: 'POST',
     })
     if (res.ok) {

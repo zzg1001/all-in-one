@@ -66,7 +66,7 @@ async function testConnection() {
   }
   isTesting.value = true
   try {
-    const res = await fetch(`${API_BASE}/api/proxy/test-connection`, {
+    const res = await fetch(`${API_BASE}/proxy/test-connection`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -92,7 +92,7 @@ async function testConnection() {
 async function fetchProxyConfigs() {
   proxyLoading.value = true
   try {
-    const res = await fetch(`${API_BASE}/api/proxy/configs`)
+    const res = await fetch(`${API_BASE}/proxy/configs`)
     if (res.ok) proxyConfigs.value = await res.json()
   } catch (e) { console.error('获取代理配置失败:', e) }
   finally { proxyLoading.value = false }
@@ -100,7 +100,7 @@ async function fetchProxyConfigs() {
 
 async function fetchProxyStatus() {
   try {
-    const res = await fetch(`${API_BASE}/api/proxy/status`)
+    const res = await fetch(`${API_BASE}/proxy/status`)
     if (res.ok) {
       proxyStatus.value = await res.json()
     }
@@ -109,7 +109,7 @@ async function fetchProxyStatus() {
 
 async function saveProxyConfig() {
   try {
-    const url = isProxyEditing.value ? `${API_BASE}/api/proxy/configs/${proxyForm.value.id}` : `${API_BASE}/api/proxy/configs`
+    const url = isProxyEditing.value ? `${API_BASE}/proxy/configs/${proxyForm.value.id}` : `${API_BASE}/proxy/configs`
     const res = await fetch(url, { method: isProxyEditing.value ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(proxyForm.value) })
     if (res.ok) {
       showProxyModal.value = false
@@ -128,7 +128,7 @@ async function saveProxyConfig() {
 async function deleteProxyConfig(config: ProxyConfig) {
   if (!confirm(`确定删除配置 "${config.name}"？`)) return
   try {
-    const res = await fetch(`${API_BASE}/api/proxy/configs/${config.id}`, { method: 'DELETE' })
+    const res = await fetch(`${API_BASE}/proxy/configs/${config.id}`, { method: 'DELETE' })
     if (res.ok) {
       showToast('success', '配置已删除')
       fetchProxyConfigs()
@@ -141,7 +141,7 @@ async function deleteProxyConfig(config: ProxyConfig) {
 
 async function startProxy(config: ProxyConfig) {
   try {
-    const res = await fetch(`${API_BASE}/api/proxy/configs/${config.id}/start`, { method: 'POST' })
+    const res = await fetch(`${API_BASE}/proxy/configs/${config.id}/start`, { method: 'POST' })
     const data = await res.json()
     if (res.ok) {
       showToast('success', `代理已启动 - ${data.proxy_url}`)
@@ -162,7 +162,7 @@ function copyToClipboard(text: string, label: string) {
 
 async function stopProxy(config: ProxyConfig) {
   try {
-    const res = await fetch(`${API_BASE}/api/proxy/configs/${config.id}/stop`, { method: 'POST' })
+    const res = await fetch(`${API_BASE}/proxy/configs/${config.id}/stop`, { method: 'POST' })
     if (res.ok) {
       showToast('success', '代理已停止')
       fetchProxyConfigs()
@@ -177,11 +177,11 @@ async function restartProxy(config: ProxyConfig) {
   showToast('success', '正在重启...')
   try {
     // 先停止
-    await fetch(`${API_BASE}/api/proxy/configs/${config.id}/stop`, { method: 'POST' })
+    await fetch(`${API_BASE}/proxy/configs/${config.id}/stop`, { method: 'POST' })
     // 等待一下
     await new Promise(resolve => setTimeout(resolve, 500))
     // 再启动
-    const res = await fetch(`${API_BASE}/api/proxy/configs/${config.id}/start`, { method: 'POST' })
+    const res = await fetch(`${API_BASE}/proxy/configs/${config.id}/start`, { method: 'POST' })
     if (res.ok) {
       showToast('success', '代理已重启')
       fetchProxyConfigs()
