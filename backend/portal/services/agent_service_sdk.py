@@ -318,11 +318,11 @@ class AgentSDKService:
     - 不自动生成技能
     """
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, agent_id: str = None):
         self.db = db
         self._skills_cache = {}  # 技能缓存
         self._agents_cache = {}  # Agent 缓存
-        self._init_config()
+        self._init_config(agent_id)
         self._init_client()
 
     def preload_data(self, skill_ids: List[str] = None, agent_id: str = None):
@@ -380,18 +380,43 @@ class AgentSDKService:
         """从缓存获取 Agent 信息"""
         return self._agents_cache.get(agent_id)
 
-    def _init_config(self):
-        """初始化配置（优先数据库，回退环境变量）"""
-        active_config = self.db.query(CCConfig).filter(CCConfig.is_active == True).first()
+    def _init_config(self, agent_id: str = None):
+        """
+        初始化配置
+        优先级：
+        1. 根据 Agent 选择的模型找对应的 CCConfig
+        2. 第一个激活的 CCConfig
+        3. 环境变量
+        """
+        from portal.models.agent import Agent
 
-        if active_config:
-            self.model = active_config.model_id
-            self.api_key = active_config.api_key
-            self.base_url = active_config.base_url
-            self.max_tokens = active_config.max_tokens or 16384
-            self.temperature = active_config.temperature or 0.7
-            self.system_prompt_prefix = active_config.system_prompt or ""
-            print(f"[AgentSDKService] 使用数据库配置: {active_config.name} ({active_config.model_id})")
+        target_model_id = None
+        config = None
+
+        # 1. 如果有 agent_id，获取 Agent 配置的模型
+        if agent_id:
+            agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
+            if agent and agent.model:
+                target_model_id = agent.model
+                print(f"[AgentSDKService] Agent '{agent.name}' 配置使用模型: {target_model_id}")
+                # 根据 model_id 查找对应的 CCConfig
+                config = self.db.query(CCConfig).filter(
+                    CCConfig.model_id == target_model_id,
+                    CCConfig.is_active == True
+                ).first()
+
+        # 2. 如果没找到对应配置，使用第一个激活的配置
+        if not config:
+            config = self.db.query(CCConfig).filter(CCConfig.is_active == True).first()
+
+        if config:
+            self.model = config.model_id
+            self.api_key = config.api_key
+            self.base_url = config.base_url
+            self.max_tokens = config.max_tokens or 16384
+            self.temperature = config.temperature or 0.7
+            self.system_prompt_prefix = config.system_prompt or ""
+            print(f"[AgentSDKService] 使用数据库配置: {config.name} ({config.model_id})")
         else:
             self.model = settings.claude_model
             self.api_key = settings.anthropic_auth_token

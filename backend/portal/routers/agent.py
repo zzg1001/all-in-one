@@ -51,7 +51,7 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         user_input=request.message
     )
 
-    service = AgentSDKService(db)
+    service = AgentSDKService(db, agent_id=request.agent_id)
     try:
         history = [{"role": m.role, "content": m.content} for m in request.history] if request.history else []
         log_ai_start(request.message[:100])
@@ -181,8 +181,8 @@ async def chat_stream(
    - 告知用户未找到相关数据
    - 建议用户先在 File Manage 中上传相关文件"""
 
-    # 使用工厂方法获取合适的服务（根据模型配置自动选择 Claude SDK / OpenAI SDK / LiteLLM）
-    service = get_agent_service(db)
+    # 使用工厂方法获取合适的服务（根据 Agent 选择的模型使用对应配置）
+    service = get_agent_service(db, agent_id=request.agent_id)
 
     # 调试日志
     print(f"\n[/chat/stream] ========== 请求信息 ==========")
@@ -286,7 +286,7 @@ async def execute_skill(request: ExecuteRequest, db: Session = Depends(get_db)):
     print(f"======================================\n")
 
     # 使用 Claude Agent SDK 执行技能
-    service = AgentSDKService(db)
+    service = AgentSDKService(db, agent_id=request.agent_id)
     log_skill_step(skill_name, "执行脚本", detail=f"使用 Claude Agent SDK")
 
     # 调用异步执行方法
@@ -809,7 +809,7 @@ async def skill_chat_stream(request: SkillChatRequest, db: Session = Depends(get
         user_input=request.context[:100] if request.context else None
     )
 
-    service = AgentSDKService(db)
+    service = AgentSDKService(db, agent_id=request.agent_id)
 
     async def generate():
         try:

@@ -15,25 +15,18 @@ from app.core.config import get_settings
 settings = get_settings()
 
 
-def get_agent_service(db: Session):
+def get_agent_service(db: Session, agent_id: str = None):
     """
     获取 Agent 服务
+
+    Args:
+        db: 数据库会话
+        agent_id: Agent ID，用于获取该 Agent 配置的模型
 
     Returns:
         AgentSDKService 服务实例（支持 skill 调用）
     """
-    # 获取激活的配置
-    active_config = db.query(CCConfig).filter(CCConfig.is_active == True).first()
-
-    if active_config:
-        print(f"[AgentServiceFactory] 使用数据库配置: {active_config.name}")
-        print(f"[AgentServiceFactory] 模型: {active_config.model_id}")
-        print(f"[AgentServiceFactory] Base URL: {active_config.base_url or '默认'}")
-    else:
-        print(f"[AgentServiceFactory] 使用环境变量配置")
-        print(f"[AgentServiceFactory] 模型: {settings.claude_model}")
-
     # 使用 AgentSDKService - 支持 skill 调用
     from portal.services.agent_service_sdk import AgentSDKService
-    print(f"[AgentServiceFactory] 创建 AgentSDKService（支持 Skill 调用）")
-    return AgentSDKService(db)
+    print(f"[AgentServiceFactory] 创建 AgentSDKService（agent_id={agent_id}）")
+    return AgentSDKService(db, agent_id=agent_id)
