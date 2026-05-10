@@ -2,10 +2,11 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install Chinese fonts for matplotlib charts
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Use China mirror and install Chinese fonts for matplotlib charts
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && apt-get install -y --no-install-recommends \
     fonts-wqy-zenhei \
-    fonts-noto-cjk \
+    fontconfig \
     && rm -rf /var/lib/apt/lists/* \
     && fc-cache -fv
 

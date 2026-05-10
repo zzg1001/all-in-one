@@ -607,6 +607,9 @@ export const skillsApi = {
 
   // 同步全部
   syncAll: () => request<any>('/skills/sync-all', { method: 'POST' }),
+
+  // 获取版本信息
+  getVersion: (id: string) => request<{ version: string; updated_at: string | null }>(`/skills/${id}/version`),
 }
 
 // Export all APIs

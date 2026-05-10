@@ -16,6 +16,29 @@ settings = get_settings()
 
 router = APIRouter(prefix="/api/skills", tags=["Skills"])
 
+
+def write_version_file(folder: Path, version: str):
+    """写入版本文件"""
+    from datetime import datetime
+    content = f"{version}\n{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    (folder / "VERSION").write_text(content, encoding="utf-8")
+
+
+def read_version_file(folder: Path, default_version: str = "1.0.0") -> dict:
+    """读取版本文件，不存在则创建"""
+    version_file = folder / "VERSION"
+    if not version_file.exists():
+        write_version_file(folder, default_version)
+
+    try:
+        content = version_file.read_text(encoding="utf-8").strip().split("\n")
+        return {
+            "version": content[0] if content else default_version,
+            "updated_at": content[1] if len(content) > 1 else None
+        }
+    except:
+        return {"version": default_version, "updated_at": None}
+
 # 技能文件夹存储目录 - 使用统一配置
 SKILLS_STORAGE_DIR = get_skills_storage_dir()
 
@@ -147,6 +170,7 @@ async def create_skill(skill_data: SkillCreate, db: Session = Depends(get_db)):
     }
     config_path = skill_folder / "config.json"
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_version_file(skill_folder, skill_data.version or "1.0.0")
 
     # 新建技能，group_id = id（首个版本）
     # 创建只保存本地，同步到 MinIO 需要手动操作
@@ -436,6 +460,7 @@ async def upload_skill(
         # 2. 先写本地（必须成功）
         try:
             shutil.copytree(temp_folder, skill_folder)
+            write_version_file(skill_folder, version)
             print(f"[Skills] 本地写入成功: {skill_folder}")
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"本地保存失败: {e}")
@@ -548,6 +573,7 @@ async def update_skill(
         }
         config_path = skill_folder / "config.json"
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_version_file(skill_folder, old_skill.version or "1.0.0")
 
         # 同步到 MinIO（双写）
         from portal.services.storage.utils import sync_skill_folder_to_minio
@@ -620,6 +646,7 @@ async def update_skill(
     }
     config_path = new_skill_folder / "config.json"
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_version_file(new_skill_folder, update_data.get("version") or new_version)
 
     # 同步新版本文件夹到 MinIO（双写）
     from portal.services.storage.utils import sync_skill_folder_to_minio
@@ -701,6 +728,9 @@ async def update_skill_folder(
             await storage.rmdir(skill_id)
         # 上传新文件
         await sync_skill_folder_to_minio(skill_folder, skill_id)
+
+        # 更新版本文件
+        write_version_file(skill_folder, skill.version or "1.0.0")
 
         # 更新 folder_path
         skill.folder_path = skill_id
@@ -890,6 +920,23 @@ async def push_all_skills_to_remote(db: Session = Depends(get_db)):
         "skills_count": len(skills),
         "failed": failed_skills if failed_skills else None
     }
+
+
+@router.get("/{skill_id}/version")
+async def get_skill_version(skill_id: str, db: Session = Depends(get_db)):
+    """获取技能版本信息"""
+    skill = db.query(Skill).filter(Skill.id == skill_id).first()
+    if not skill:
+        raise HTTPException(status_code=404, detail="技能不存在")
+
+    if not skill.folder_path:
+        return {"version": skill.version or "1.0.0", "updated_at": None}
+
+    skill_folder = SKILLS_STORAGE_DIR / skill.folder_path
+    if not skill_folder.exists():
+        return {"version": skill.version or "1.0.0", "updated_at": None}
+
+    return read_version_file(skill_folder, skill.version or "1.0.0")
 
 
 @router.get("/{skill_id}/files")

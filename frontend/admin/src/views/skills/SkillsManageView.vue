@@ -16,6 +16,39 @@ const searchQuery = ref('')
 // 多选
 const selectedIds = ref<Set<string>>(new Set())
 
+// 版本信息缓存
+const versionCache = ref<Record<string, { version: string; updated_at: string | null }>>({})
+
+// 浮框位置
+const tooltipStyle = ref({ top: '0px', left: '0px' })
+const activeTooltipId = ref<string | null>(null)
+
+// 计算浮框位置
+const showTooltip = (e: MouseEvent, skillId: string) => {
+  const card = (e.currentTarget as HTMLElement)
+  const rect = card.getBoundingClientRect()
+  tooltipStyle.value = {
+    top: `${rect.top - 8}px`,
+    left: `${rect.left + rect.width / 2}px`
+  }
+  activeTooltipId.value = skillId
+}
+
+const hideTooltip = () => {
+  activeTooltipId.value = null
+}
+
+// 获取版本信息
+const getVersionInfo = async (skillId: string) => {
+  if (versionCache.value[skillId]) return
+  try {
+    const info = await skillsApi.getVersion(skillId)
+    versionCache.value[skillId] = info
+  } catch (e) {
+    console.warn('获取版本信息失败:', e)
+  }
+}
+
 // 上传弹窗
 const showUploadModal = ref(false)
 const uploadForm = ref({ name: '', description: '', icon: '⚡', tags: '', version: '1.0.0', entry_script: 'main.py' })
@@ -444,6 +477,8 @@ onMounted(() => {
           class="skill-card"
           :class="{ selected: selectedIds.has(skill.id) }"
           @click="toggleSelect(skill.id)"
+          @mouseenter="(e) => { getVersionInfo(skill.id); showTooltip(e, skill.id) }"
+          @mouseleave="hideTooltip"
         >
           <div class="card-main">
             <div class="card-icon">{{ skill.icon || '⚡' }}</div>
@@ -475,6 +510,7 @@ onMounted(() => {
               <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
             </button>
           </div>
+
         </div>
 
         <!-- 上传占位卡片 -->
@@ -494,6 +530,26 @@ onMounted(() => {
         </div>
       </template>
     </div>
+
+    <!-- 全局版本浮框 -->
+    <Teleport to="body">
+      <div
+        v-if="activeTooltipId"
+        class="skill-tooltip-fixed"
+        :style="{ top: tooltipStyle.top, left: tooltipStyle.left }"
+      >
+        <template v-for="skill in filteredSkills" :key="skill.id">
+          <template v-if="skill.id === activeTooltipId">
+            <div class="tooltip-name">{{ skill.name }}</div>
+            <div class="tooltip-desc">{{ skill.description || '暂无描述' }}</div>
+            <div class="tooltip-version">
+              <span>版本: v{{ versionCache[skill.id]?.version || skill.version || '1.0.0' }}</span>
+              <span v-if="versionCache[skill.id]?.updated_at">更新: {{ versionCache[skill.id].updated_at }}</span>
+            </div>
+          </template>
+        </template>
+      </div>
+    </Teleport>
 
     <!-- 上传弹窗 -->
     <div v-if="showUploadModal" class="modal-overlay" @click.self="showUploadModal = false">
@@ -1027,6 +1083,52 @@ onMounted(() => {
 .action-btn svg {
   width: 14px;
   height: 14px;
+}
+
+/* 版本浮框 - fixed 定位，显示在卡片上方 */
+.skill-tooltip-fixed {
+  position: fixed;
+  transform: translate(-50%, -100%);
+  background: rgba(30, 41, 59, 0.95);
+  color: white;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  z-index: 9999;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  max-width: 280px;
+  pointer-events: none;
+}
+
+.skill-tooltip-fixed::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: rgba(30, 41, 59, 0.95);
+}
+
+.tooltip-name {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.tooltip-desc {
+  opacity: 0.85;
+  margin-bottom: 6px;
+  line-height: 1.4;
+}
+
+.tooltip-version {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255,255,255,0.2);
+  font-size: 11px;
+  opacity: 0.75;
 }
 
 /* 上传占位卡片 */
