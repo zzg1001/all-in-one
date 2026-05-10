@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import config from '@/config'
 import { setLocale, getLocale } from '@/locales'
 import { useAuthStore } from '@/stores/auth'
+import { agentsApi } from '@/api'
 import '@/assets/home.css'
 import './HomePage.css'
 
@@ -21,8 +22,8 @@ const toggleLocale = () => {
 // 用户菜单
 const showUserMenu = ref(false)
 
-// Agent 配置（8个入口）
-const allAgents = [
+// 预设 Agent 配置（8个入口）
+const presetAgents = [
   { name: 'HR部门 Agent', department: 'HR', theme: 'blue', desc: '人事数据分析 · 入离职流程自动化 · 招聘文案生成' },
   { name: '销售部门 Agent', department: '销售', theme: 'purple', desc: '销售数据分析 · 客户管理自动化 · 销售物料生成' },
   { name: '采购部门 Agent', department: '采购', theme: 'cyan', desc: '采购成本分析 · 采购流程自动化 · 供应商管理' },
@@ -33,8 +34,14 @@ const allAgents = [
   { name: '老板视角', department: null, theme: 'indigo', desc: '现金流与财务健康 · 增长与战略方向 · 人才与团队' },
 ]
 
-// 所有 Agent 都显示（无论是否登录）
-const visibleAgents = computed(() => allAgents)
+// 动态加载的 Agent
+const dynamicAgents = ref<Array<{ name: string; department: string | null; theme: string; desc: string }>>([])
+
+// 可用的颜色主题（用于动态 Agent）
+const themeColors = ['teal', 'amber', 'rose', 'lime', 'sky', 'violet', 'emerald', 'pink']
+
+// 合并预设和动态 Agent
+const visibleAgents = computed(() => [...presetAgents, ...dynamicAgents.value])
 
 // 处理 Agent 点击
 function handleAgentClick(agentName: string, theme: string) {
@@ -67,9 +74,34 @@ async function handleLogout() {
   showUserMenu.value = false
 }
 
+// 加载动态 Agent 列表
+async function loadDynamicAgents() {
+  try {
+    const res = await agentsApi.getAll({ status: 'active' })
+    if (res.agents) {
+      // 获取预设 Agent 名称列表
+      const presetNames = new Set(presetAgents.map(a => a.name))
+      // 过滤掉预设中已有的，只保留新发布的
+      const newAgents = res.agents
+        .filter(agent => !presetNames.has(agent.name))
+        .map((agent, index) => ({
+          name: agent.name,
+          department: null,
+          theme: themeColors[index % themeColors.length],
+          desc: agent.description || '自定义智能体'
+        }))
+      dynamicAgents.value = newAgents
+    }
+  } catch (err) {
+    console.error('加载动态 Agent 失败:', err)
+  }
+}
+
 // 检查认证状态
 onMounted(async () => {
   await authStore.checkAuth()
+  // 加载动态 Agent
+  loadDynamicAgents()
 })
 </script>
 
@@ -540,6 +572,15 @@ html, body {
 .card-magenta .card-icon { background: linear-gradient(135deg, #ec4899 0%, #f472b6 50%, #fce7f3 100%); }
 .card-red .card-icon { background: linear-gradient(135deg, #ef4444 0%, #fca5a5 50%, #fef3c7 100%); }
 .card-indigo .card-icon { background: linear-gradient(135deg, #6366f1 0%, #a5b4fc 50%, #e0e7ff 100%); }
+/* 动态 Agent 使用的额外颜色 */
+.card-teal .card-icon { background: linear-gradient(135deg, #14b8a6 0%, #5eead4 50%, #99f6e4 100%); }
+.card-amber .card-icon { background: linear-gradient(135deg, #f59e0b 0%, #fbbf24 50%, #fde68a 100%); }
+.card-rose .card-icon { background: linear-gradient(135deg, #f43f5e 0%, #fb7185 50%, #fecdd3 100%); }
+.card-lime .card-icon { background: linear-gradient(135deg, #84cc16 0%, #a3e635 50%, #d9f99d 100%); }
+.card-sky .card-icon { background: linear-gradient(135deg, #0ea5e9 0%, #38bdf8 50%, #bae6fd 100%); }
+.card-violet .card-icon { background: linear-gradient(135deg, #8b5cf6 0%, #a78bfa 50%, #ddd6fe 100%); }
+.card-emerald .card-icon { background: linear-gradient(135deg, #10b981 0%, #34d399 50%, #a7f3d0 100%); }
+.card-pink .card-icon { background: linear-gradient(135deg, #ec4899 0%, #f472b6 50%, #fbcfe8 100%); }
 
 .card-icon {
   width: 48px;

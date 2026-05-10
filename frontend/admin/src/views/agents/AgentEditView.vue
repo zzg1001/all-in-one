@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { agentsApi, skillsApi, type Agent, type Skill } from '@/api'
+import { agentsApi, skillsApi, ccswitchApi, type Agent, type Skill, type CCConfig } from '@/api'
 import Toast from '@/components/Toast.vue'
 
 const route = useRoute()
@@ -10,11 +10,11 @@ const toast = ref<InstanceType<typeof Toast> | null>(null)
 
 const loading = ref(false)
 const saving = ref(false)
+const activeTab = ref<'basic' | 'model' | 'prompt' | 'skills'>('basic')
 const allSkills = ref<Skill[]>([])
+const availableModels = ref<CCConfig[]>([])
 const selectedSkillIds = ref<Set<string>>(new Set())
 const skillSearchQuery = ref('')
-const hoveredSkill = ref<Skill | null>(null)
-const tooltipPos = ref({ x: 0, y: 0 })
 
 const isCreating = computed(() => route.params.id === 'new')
 
@@ -24,7 +24,7 @@ const agent = ref<Partial<Agent>>({
   icon: '🤖',
   category: '通用助手',
   system_prompt: '',
-  model: 'claude-opus-4-5',
+  model: '',
   temperature: 0.7,
   max_tokens: 4096,
   status: 'draft',
@@ -35,22 +35,39 @@ const filteredSkills = computed(() => {
   if (!skillSearchQuery.value) return allSkills.value
   const q = skillSearchQuery.value.toLowerCase()
   return allSkills.value.filter(s =>
-    s.name.toLowerCase().includes(q) ||
-    s.description?.toLowerCase().includes(q)
+    s.name.toLowerCase().includes(q) || s.description?.toLowerCase().includes(q)
   )
 })
 
 const icons = ['🤖', '🧠', '💡', '🎯', '🚀', '⚡', '🔧', '📊', '📝', '💻', '🌐', '🔍']
 const categories = ['通用助手', 'HR', '销售', '采购', '行政', '财务', '技术', '自定义']
 
+const currentModel = computed(() => {
+  const m = availableModels.value.find(m => m.model_id === agent.value.model)
+  return m?.name || '未选择'
+})
+
 const loadData = async () => {
   loading.value = true
   try {
-    allSkills.value = await skillsApi.getAll()
+    const [skills, models] = await Promise.all([
+      skillsApi.getAll(),
+      ccswitchApi.getAll(true)
+    ])
+    allSkills.value = skills
+    availableModels.value = models
+
+    if (isCreating.value && models.length > 0) {
+      agent.value.model = models[0].model_id
+    }
+
     if (!isCreating.value) {
       const data = await agentsApi.getById(route.params.id as string)
       agent.value = { ...data }
-      selectedSkillIds.value = new Set(data.skills || [])
+      // 只保留存在的技能ID
+      const existingSkillIds = new Set(skills.map(s => s.id))
+      const validSkillIds = (data.skills || []).filter((id: string) => existingSkillIds.has(id))
+      selectedSkillIds.value = new Set(validSkillIds)
     }
   } catch (e) {
     toast.value?.error('加载失败')
@@ -68,20 +85,10 @@ const toggleSkill = (skillId: string) => {
   selectedSkillIds.value = new Set(selectedSkillIds.value)
 }
 
-const showTooltip = (skill: Skill, e: MouseEvent) => {
-  hoveredSkill.value = skill
-  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-  tooltipPos.value = {
-    x: Math.min(rect.left + rect.width / 2, window.innerWidth - 100),
-    y: rect.top - 10
-  }
-}
-
-const hideTooltip = () => { hoveredSkill.value = null }
-
 const save = async () => {
   if (!agent.value.name) {
-    toast.value?.warning('请输入名称')
+    toast.value?.warning('请输入 Agent 名称')
+    activeTab.value = 'basic'
     return
   }
   saving.value = true
@@ -107,579 +114,725 @@ onMounted(() => loadData())
 <template>
   <Toast ref="toast" />
 
-  <!-- Tooltip -->
-  <Teleport to="body">
-    <Transition name="fade">
-      <div v-if="hoveredSkill" class="tooltip" :style="{ left: tooltipPos.x + 'px', top: tooltipPos.y + 'px' }">
-        <div class="tooltip-name">{{ hoveredSkill.name }}</div>
-        <div class="tooltip-desc">{{ hoveredSkill.description || '暂无描述' }}</div>
+  <div class="page" v-if="!loading">
+    <!-- 顶部操作栏 -->
+    <header class="page-header">
+      <div class="header-left">
+        <button class="btn-back" @click="router.push('/agent-manage')">
+          <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd"/></svg>
+          返回
+        </button>
+        <div class="header-title">
+          <span class="title-icon">{{ agent.icon }}</span>
+          <span class="title-text">{{ agent.name || '新建 Agent' }}</span>
+          <span class="title-status" :class="agent.status">{{ agent.status === 'active' ? '已发布' : '草稿' }}</span>
+        </div>
       </div>
-    </Transition>
-  </Teleport>
-
-  <!-- 主容器 -->
-  <div class="page">
-    <!-- 顶部栏 -->
-    <header class="header">
-      <button class="header-btn back" @click="router.push('/agent-manage')">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M15 18l-6-6 6-6"/>
-        </svg>
-      </button>
-      <div class="header-title">
-        <span class="header-icon">{{ agent.icon }}</span>
-        {{ isCreating ? '新建 Agent' : '编辑 Agent' }}
+      <div class="header-right">
+        <button class="btn-draft" v-if="agent.status === 'active'" @click="agent.status = 'draft'; save()">
+          转为草稿
+        </button>
+        <button class="btn-publish" v-if="agent.status === 'draft'" :disabled="saving" @click="agent.status = 'active'; save()">
+          发布
+        </button>
+        <button class="btn-save" :disabled="saving" @click="save">
+          {{ saving ? '保存中...' : '保存' }}
+        </button>
       </div>
-      <button class="header-btn save" :disabled="saving" @click="save">
-        {{ saving ? '保存中' : '保存' }}
-      </button>
     </header>
 
-    <!-- 内容区 -->
-    <main class="content" v-if="!loading">
-      <!-- 左侧：基本信息 -->
-      <section class="panel main-panel">
-        <div class="panel-title">基本信息</div>
+    <div class="page-body">
+      <!-- 左侧导航 -->
+      <aside class="sidebar">
+        <nav class="nav-menu">
+          <div class="nav-item" :class="{ active: activeTab === 'basic' }" @click="activeTab = 'basic'">
+            <span class="nav-icon">📋</span>
+            <span class="nav-text">基本信息</span>
+          </div>
+          <div class="nav-item" :class="{ active: activeTab === 'model' }" @click="activeTab = 'model'">
+            <span class="nav-icon">🤖</span>
+            <span class="nav-text">模型配置</span>
+          </div>
+          <div class="nav-item" :class="{ active: activeTab === 'prompt' }" @click="activeTab = 'prompt'">
+            <span class="nav-icon">📝</span>
+            <span class="nav-text">系统提示词</span>
+            <span class="nav-badge" v-if="agent.system_prompt">已配置</span>
+          </div>
+          <div class="nav-item" :class="{ active: activeTab === 'skills' }" @click="activeTab = 'skills'">
+            <span class="nav-icon">⚡</span>
+            <span class="nav-text">绑定技能</span>
+            <span class="nav-badge">{{ selectedSkillIds.size }}</span>
+          </div>
+        </nav>
+      </aside>
 
+    <!-- 右侧内容 -->
+    <main class="content">
+      <!-- 基本信息 -->
+      <div v-show="activeTab === 'basic'" class="panel">
         <div class="form-section">
-          <!-- 图标选择 -->
-          <div class="icon-select">
-            <button
-              v-for="ic in icons"
-              :key="ic"
-              class="icon-item"
-              :class="{ active: agent.icon === ic }"
-              @click="agent.icon = ic"
-            >{{ ic }}</button>
-          </div>
-
-          <!-- 名称 & 分类 -->
-          <div class="form-row">
-            <div class="form-field flex2">
-              <label>名称</label>
-              <input v-model="agent.name" placeholder="输入 Agent 名称" />
-            </div>
-            <div class="form-field flex1">
-              <label>分类</label>
-              <select v-model="agent.category">
-                <option v-for="c in categories" :key="c">{{ c }}</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- 描述 -->
-          <div class="form-field">
-            <label>描述</label>
-            <input v-model="agent.description" placeholder="简短描述这个 Agent" />
+          <div class="section-title">图标</div>
+          <div class="icon-picker">
+            <button v-for="ic in icons" :key="ic" :class="{ active: agent.icon === ic }" @click="agent.icon = ic">{{ ic }}</button>
           </div>
         </div>
-
-        <div class="divider"></div>
-
-        <div class="panel-title">模型配置</div>
         <div class="form-section">
-          <div class="form-row">
-            <div class="form-field flex1">
-              <label>模型</label>
-              <select v-model="agent.model">
-                <option value="claude-opus-4-5">Claude Opus 4.5</option>
-                <option value="claude-sonnet-4">Claude Sonnet 4</option>
-                <option value="claude-haiku">Claude Haiku</option>
-              </select>
-            </div>
-            <div class="form-field flex1">
-              <label>温度 <span class="label-value">{{ agent.temperature }}</span></label>
-              <input type="range" v-model.number="agent.temperature" min="0" max="1" step="0.1" class="range" />
-            </div>
-            <div class="form-field flex1">
-              <label>最大 Token</label>
-              <input type="number" v-model.number="agent.max_tokens" min="256" max="8192" />
-            </div>
-          </div>
-
-          <!-- 系统提示词 -->
-          <div class="form-field">
-            <label>系统提示词</label>
-            <textarea v-model="agent.system_prompt" rows="4" placeholder="定义 Agent 的角色和行为规则..."></textarea>
-          </div>
-
-          <!-- 状态 -->
-          <div class="form-field">
-            <label>状态</label>
-            <div class="status-toggle">
-              <button :class="{ active: agent.status === 'draft' }" @click="agent.status = 'draft'">
-                <span class="dot draft"></span> 草稿
-              </button>
-              <button :class="{ active: agent.status === 'active' }" @click="agent.status = 'active'">
-                <span class="dot active"></span> 已发布
-              </button>
-            </div>
+          <div class="section-title">名称 <span class="required">*</span></div>
+          <input v-model="agent.name" placeholder="给 Agent 起个名字" class="apple-input" />
+        </div>
+        <div class="form-section">
+          <div class="section-title">分类</div>
+          <div class="apple-select-group">
+            <button v-for="c in categories" :key="c" :class="{ active: agent.category === c }" @click="agent.category = c">{{ c }}</button>
           </div>
         </div>
-      </section>
-
-      <!-- 右侧：技能绑定 -->
-      <section class="panel skill-panel">
-        <div class="panel-header">
-          <div class="panel-title">绑定技能</div>
-          <span class="skill-badge">{{ selectedSkillIds.size }} 已选</span>
+        <div class="form-section">
+          <div class="section-title">描述</div>
+          <input v-model="agent.description" placeholder="简单描述 Agent 的功能" class="apple-input" />
         </div>
+      </div>
 
-        <div class="skill-search">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
-          </svg>
-          <input v-model="skillSearchQuery" placeholder="搜索技能..." />
-        </div>
-
-        <div class="skill-grid">
-          <div
-            v-for="skill in filteredSkills"
-            :key="skill.id"
-            class="skill-card"
-            :class="{ selected: selectedSkillIds.has(skill.id) }"
-            @click="toggleSkill(skill.id)"
-            @mouseenter="showTooltip(skill, $event)"
-            @mouseleave="hideTooltip"
-          >
-            <span class="skill-icon">{{ skill.icon || '⚡' }}</span>
-            <span class="skill-name">{{ skill.name }}</span>
-            <div class="skill-check" v-if="selectedSkillIds.has(skill.id)">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-                <polyline points="20 6 9 17 4 12"/>
-              </svg>
+      <!-- 模型配置 -->
+      <div v-show="activeTab === 'model'" class="panel">
+        <div class="form-section">
+          <div class="section-title">选择模型</div>
+          <div class="model-cards">
+            <div
+              v-for="m in availableModels"
+              :key="m.id"
+              class="model-card"
+              :class="{ active: agent.model === m.model_id }"
+              @click="agent.model = m.model_id"
+            >
+              <div class="model-icon">🤖</div>
+              <div class="model-name">{{ m.name }}</div>
+              <div class="model-check" v-if="agent.model === m.model_id">✓</div>
             </div>
           </div>
-          <div v-if="!filteredSkills.length" class="skill-empty">暂无技能</div>
+          <div v-if="!availableModels.length" class="empty-hint">请先在模型配置中添加模型</div>
         </div>
-      </section>
+        <div class="form-section">
+          <div class="section-row">
+            <div class="section-title">温度</div>
+            <div class="section-value">{{ agent.temperature }}</div>
+          </div>
+          <input type="range" v-model.number="agent.temperature" min="0" max="1" step="0.1" class="apple-range" />
+          <div class="range-hints"><span>精确</span><span>创意</span></div>
+        </div>
+        <div class="form-section">
+          <div class="section-row">
+            <div class="section-title">最大 Token</div>
+            <input type="number" v-model.number="agent.max_tokens" min="256" max="8192" class="apple-input-small" />
+          </div>
+        </div>
+      </div>
+
+      <!-- 系统提示词 -->
+      <div v-show="activeTab === 'prompt'" class="panel full-height">
+        <div class="form-section full">
+          <div class="section-title">系统提示词</div>
+          <div class="section-hint">定义 Agent 的角色、能力和行为规范</div>
+          <textarea v-model="agent.system_prompt" class="apple-textarea" placeholder="例如：你是一个专业的人力资源助手..."></textarea>
+        </div>
+      </div>
+
+      <!-- 绑定技能 -->
+      <div v-show="activeTab === 'skills'" class="panel full-height">
+        <div class="form-section full">
+          <div class="section-row">
+            <div>
+              <div class="section-title">绑定技能</div>
+              <div class="section-hint">共 {{ filteredSkills.length }} 个技能</div>
+            </div>
+            <div class="search-box">
+              <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2" fill="none"/><path d="m21 21-4.35-4.35" stroke="currentColor" stroke-width="2"/></svg>
+              <input v-model="skillSearchQuery" placeholder="搜索" />
+            </div>
+          </div>
+          <div class="skills-cards">
+            <div
+              v-for="skill in filteredSkills"
+              :key="skill.id"
+              class="skill-card"
+              :class="{ selected: selectedSkillIds.has(skill.id) }"
+              @click="toggleSkill(skill.id)"
+            >
+              <div class="skill-header">
+                <div class="skill-icon">{{ skill.icon || '⚡' }}</div>
+                <div class="skill-name">{{ skill.name }}</div>
+                <div class="skill-check" v-if="selectedSkillIds.has(skill.id)">✓</div>
+              </div>
+              <div class="skill-desc">{{ skill.description || '暂无描述' }}</div>
+              <div class="skill-tooltip">
+                <div class="tooltip-name">{{ skill.name }}</div>
+                <div class="tooltip-desc">{{ skill.description || '暂无描述' }}</div>
+              </div>
+            </div>
+            <div v-if="!filteredSkills.length" class="empty-hint">暂无技能</div>
+          </div>
+        </div>
+      </div>
     </main>
-
-    <!-- Loading -->
-    <div v-else class="loading">
-      <div class="spinner"></div>
     </div>
+  </div>
+
+  <!-- Loading -->
+  <div v-else class="loading-page">
+    <div class="spinner"></div>
   </div>
 </template>
 
 <style scoped>
-/* 页面容器 */
 .page {
-  height: 100%;
-  min-height: 100vh;
-  background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
+  height: calc(100vh - 64px);
   display: flex;
   flex-direction: column;
-  position: relative;
+  background: #f5f5f7;
+  overflow: hidden;
 }
 
-/* 顶部栏 - 固定在顶部 */
-.header {
+/* 顶部操作栏 - Apple 风格 */
+.page-header {
+  height: 52px;
+  background: rgba(255,255,255,0.8);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(0,0,0,0.06);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 20px;
-  background: white;
-  border-bottom: 1px solid rgba(0,0,0,0.08);
-  position: sticky;
-  top: 0;
-  z-index: 100;
+  padding: 0 20px;
+  flex-shrink: 0;
 }
-
-.header-btn {
+.header-left {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 5px 12px;
-  border: none;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.15s;
+  gap: 16px;
 }
-
-.header-btn:active {
-  transform: scale(0.96);
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
-
-.header-btn.back {
-  background: transparent;
-  color: #007aff;
-  padding: 6px;
-}
-.header-btn.back:hover { background: rgba(0,122,255,0.08); }
-
-.header-btn.back svg {
-  width: 16px;
-  height: 16px;
-}
-
-.header-btn.save {
-  background: #007aff;
-  color: white;
-}
-.header-btn.save:hover { background: #0066d6; }
-.header-btn.save:disabled { opacity: 0.5; cursor: not-allowed; }
-
 .header-title {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 14px;
+  gap: 10px;
+}
+.title-icon { font-size: 22px; }
+.title-text {
+  font-size: 16px;
   font-weight: 600;
   color: #1d1d1f;
 }
-
-.header-icon {
-  font-size: 18px;
+.title-status {
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
 }
+.title-status.draft { background: #fff3cd; color: #856404; }
+.title-status.active { background: #d4edda; color: #155724; }
 
-/* 内容区 */
-.content {
+.btn-back {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 14px;
+  border: none;
+  border-radius: 8px;
+  background: #f5f5f7;
+  color: #1d1d1f;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-back:hover { background: #e8e8ed; }
+.btn-back svg { width: 16px; height: 16px; }
+
+.btn-draft {
+  padding: 7px 16px;
+  border: none;
+  border-radius: 8px;
+  background: #f5f5f7;
+  color: #1d1d1f;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-draft:hover { background: #e8e8ed; }
+
+.btn-publish {
+  padding: 7px 16px;
+  border: none;
+  border-radius: 8px;
+  background: #34c759;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-publish:hover { background: #2db84d; }
+.btn-publish:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-save {
+  padding: 7px 16px;
+  border: none;
+  border-radius: 8px;
+  background: #007aff;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-save:hover { background: #0066d6; }
+.btn-save:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* 页面主体 */
+.page-body {
   flex: 1;
   display: flex;
-  gap: 20px;
-  padding: 20px 24px;
   overflow: hidden;
+}
+
+/* 左侧边栏 - Apple 风格 */
+.sidebar {
+  width: 200px;
+  background: rgba(255,255,255,0.8);
+  backdrop-filter: blur(20px);
+  border-right: 1px solid rgba(0,0,0,0.06);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+/* 导航菜单 */
+.nav-menu {
+  padding: 12px 8px;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-bottom: 4px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.nav-item:hover { background: rgba(0,0,0,0.04); }
+.nav-item.active {
+  background: #007aff;
+  color: #fff;
+}
+.nav-icon { font-size: 18px; flex-shrink: 0; }
+.nav-text {
+  font-size: 14px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+.nav-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  background: rgba(0,0,0,0.06);
+  border-radius: 10px;
+  color: #86868b;
+  margin-left: auto;
+}
+.nav-item.active .nav-badge {
+  background: rgba(255,255,255,0.25);
+  color: #fff;
+}
+
+/* 右侧内容 - Apple 风格 */
+.content {
+  flex: 1;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #f5f5f7;
+}
+
+.panel {
+  background: #fff;
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.04), 0 2px 8px rgba(0,0,0,0.04);
+}
+.panel.full-height {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 表单区块 */
+.form-section {
+  margin-bottom: 24px;
+}
+.form-section:last-child { margin-bottom: 0; }
+.form-section.full {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
 }
 
-/* 面板 */
-.panel {
-  background: white;
-  border-radius: 16px;
-  box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-  overflow: hidden;
+.section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1d1d1f;
+  margin-bottom: 10px;
 }
-
-.main-panel {
-  flex: 0 0 55%;
-  padding: 24px;
-  overflow-y: auto;
+.section-hint {
+  font-size: 12px;
+  color: #86868b;
+  margin-top: -6px;
+  margin-bottom: 12px;
 }
-
-.skill-panel {
-  flex: 1;
-  min-width: 360px;
-  display: flex;
-  flex-direction: column;
-}
-
-.panel-header {
+.section-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px;
-  border-bottom: 1px solid #f0f0f0;
+  margin-bottom: 10px;
 }
-
-.panel-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #86868b;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 16px;
-}
-
-.panel-header .panel-title {
-  margin-bottom: 0;
-}
-
-.skill-badge {
-  font-size: 12px;
-  color: #007aff;
-  background: rgba(0,122,255,0.1);
-  padding: 4px 10px;
-  border-radius: 12px;
-  font-weight: 500;
-}
-
-.divider {
-  height: 1px;
-  background: #f0f0f0;
-  margin: 24px 0;
-}
-
-/* 表单 */
-.form-section {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.form-row {
-  display: flex;
-  gap: 16px;
-}
-
-.form-field {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.form-field.flex1 { flex: 1; }
-.form-field.flex2 { flex: 2; }
-
-.form-field label {
-  font-size: 13px;
+.section-value {
+  font-size: 15px;
   font-weight: 500;
   color: #1d1d1f;
 }
+.required { color: #ff3b30; }
 
-.label-value {
-  color: #007aff;
-  margin-left: 4px;
-}
-
-.form-field input[type="text"],
-.form-field input[type="number"],
-.form-field select,
-.form-field textarea {
-  padding: 10px 14px;
-  border: 1px solid #d2d2d7;
-  border-radius: 10px;
-  font-size: 15px;
-  background: #fafafa;
-  transition: all 0.2s;
-}
-
-.form-field input:focus,
-.form-field select:focus,
-.form-field textarea:focus {
-  outline: none;
-  border-color: #007aff;
-  background: white;
-  box-shadow: 0 0 0 3px rgba(0,122,255,0.1);
-}
-
-.form-field textarea {
-  resize: none;
-  line-height: 1.5;
-}
-
-/* Range 滑块 */
-.range {
-  -webkit-appearance: none;
-  height: 6px;
-  border-radius: 3px;
-  background: #e5e5ea;
-  margin-top: 4px;
-}
-.range::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: white;
-  border: 1px solid #d2d2d7;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.15);
-  cursor: pointer;
-}
-
-/* 图标选择 */
-.icon-select {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 8px;
-}
-
-.icon-item {
-  width: 40px;
-  height: 40px;
-  border: 2px solid #e5e5ea;
+/* Apple 输入框 */
+.apple-input {
+  width: 100%;
+  padding: 12px 16px;
+  border: none;
   border-radius: 12px;
-  background: white;
-  font-size: 20px;
+  background: #f5f5f7;
+  font-size: 15px;
+  color: #1d1d1f;
+  box-sizing: border-box;
+  transition: all 0.2s;
+}
+.apple-input:focus {
+  outline: none;
+  background: #fff;
+  box-shadow: 0 0 0 4px rgba(0,125,250,0.15);
+}
+.apple-input::placeholder { color: #86868b; }
+
+.apple-input-small {
+  width: 100px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 8px;
+  background: #f5f5f7;
+  font-size: 15px;
+  color: #1d1d1f;
+  text-align: right;
+}
+.apple-input-small:focus {
+  outline: none;
+  box-shadow: 0 0 0 4px rgba(0,125,250,0.15);
+}
+
+/* Apple 选择器组 */
+.apple-select-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.apple-select-group button {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 20px;
+  background: #f5f5f7;
+  font-size: 13px;
+  color: #1d1d1f;
   cursor: pointer;
   transition: all 0.2s;
 }
-.icon-item:hover {
-  border-color: #007aff;
+.apple-select-group button:hover {
+  background: #e8e8ed;
+}
+.apple-select-group button.active {
+  background: #007aff;
+  color: #fff;
+}
+
+/* 图标选择器 */
+.icon-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.icon-picker button {
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 12px;
+  background: #f5f5f7;
+  font-size: 22px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.icon-picker button:hover {
+  background: #e8e8ed;
   transform: scale(1.05);
 }
-.icon-item.active {
-  border-color: #007aff;
-  background: rgba(0,122,255,0.08);
+.icon-picker button.active {
+  background: #007aff;
+  box-shadow: 0 2px 8px rgba(0,122,255,0.3);
 }
 
-/* 状态切换 */
-.status-toggle {
+/* 模型卡片 */
+.model-cards {
   display: flex;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 10px;
 }
-
-.status-toggle button {
+.model-card {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 16px;
-  border: 1px solid #d2d2d7;
-  border-radius: 10px;
-  background: white;
-  font-size: 14px;
-  color: #86868b;
+  gap: 10px;
+  padding: 12px 16px;
+  background: #f5f5f7;
+  border-radius: 12px;
   cursor: pointer;
   transition: all 0.2s;
+  position: relative;
 }
-.status-toggle button:hover {
-  border-color: #007aff;
+.model-card:hover { background: #e8e8ed; }
+.model-card.active {
+  background: #e8f4ff;
+  box-shadow: inset 0 0 0 2px #007aff;
 }
-.status-toggle button.active {
-  border-color: #007aff;
+.model-icon { font-size: 20px; }
+.model-name { font-size: 14px; font-weight: 500; color: #1d1d1f; }
+.model-check {
+  position: absolute;
+  right: 12px;
   color: #007aff;
-  background: rgba(0,122,255,0.05);
+  font-weight: 600;
 }
 
-.dot {
-  width: 8px;
-  height: 8px;
+/* Apple Range */
+.apple-range {
+  width: 100%;
+  height: 4px;
+  border: none;
+  border-radius: 2px;
+  -webkit-appearance: none;
+  background: #e5e5ea;
+}
+.apple-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.2), 0 0 0 1px rgba(0,0,0,0.04);
+  cursor: pointer;
 }
-.dot.draft { background: #ff9500; }
-.dot.active { background: #34c759; }
+.range-hints {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #86868b;
+  margin-top: 8px;
+}
 
-/* 技能搜索 */
-.skill-search {
+/* Apple Textarea */
+.apple-textarea {
+  flex: 1;
+  width: 100%;
+  padding: 16px;
+  border: none;
+  border-radius: 12px;
+  background: #f5f5f7;
+  font-size: 15px;
+  line-height: 1.6;
+  color: #1d1d1f;
+  resize: none;
+  box-sizing: border-box;
+}
+.apple-textarea:focus {
+  outline: none;
+  background: #fff;
+  box-shadow: 0 0 0 4px rgba(0,125,250,0.15);
+}
+.apple-textarea::placeholder { color: #86868b; }
+
+/* 搜索框 */
+.search-box {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 12px 16px;
+  gap: 6px;
   padding: 8px 12px;
   background: #f5f5f7;
   border-radius: 10px;
+  width: 160px;
 }
-
-.skill-search svg {
+.search-box svg {
+  width: 14px;
+  height: 14px;
   color: #86868b;
-  flex-shrink: 0;
 }
-
-.skill-search input {
+.search-box input {
   flex: 1;
   border: none;
-  background: transparent;
-  font-size: 14px;
+  background: none;
+  font-size: 13px;
+  color: #1d1d1f;
   outline: none;
 }
+.search-box input::placeholder { color: #86868b; }
 
-/* 技能网格 */
-.skill-grid {
+/* 技能卡片 - Apple 风格 */
+.skills-cards {
   flex: 1;
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 10px;
-  padding: 12px 16px;
-  overflow-y: auto;
-  align-content: start;
-}
-
-.skill-card {
-  position: relative;
+  margin-top: 16px;
+  padding-top: 80px;
+  margin-top: -64px;
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 16px 8px;
-  background: #f5f5f7;
-  border: 2px solid transparent;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-content: flex-start;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.skill-card {
+  width: 210px;
+  padding: 16px;
+  background: #fff;
+  border: 1px solid #e5e5ea;
   border-radius: 14px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.2s ease;
+  position: relative;
+  box-sizing: border-box;
 }
-
 .skill-card:hover {
-  background: #e8e8ed;
-  transform: translateY(-2px);
+  border-color: #c5c5ca;
+  background: #fafafa;
 }
-
 .skill-card.selected {
-  background: rgba(0,122,255,0.08);
   border-color: #007aff;
+  background: #f5f9ff;
 }
-
-.skill-icon {
-  font-size: 24px;
+.skill-card .skill-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
 }
-
-.skill-name {
-  font-size: 11px;
-  font-weight: 500;
+.skill-card .skill-icon {
+  width: 36px;
+  height: 36px;
+  background: #f5f5f7;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+.skill-card.selected .skill-icon {
+  background: #007aff;
+}
+.skill-card .skill-name {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 600;
   color: #1d1d1f;
-  text-align: center;
-  max-width: 100%;
+  line-height: 1.3;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
-.skill-check {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 18px;
-  height: 18px;
+.skill-card .skill-check {
+  width: 20px;
+  height: 20px;
   background: #007aff;
+  color: #fff;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: white;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.skill-card .skill-desc {
+  font-size: 12px;
+  color: #86868b;
+  line-height: 1.5;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.skill-card .skill-tooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  width: 220px;
+  padding: 12px 14px;
+  background: #1d1d1f;
+  color: #fff;
+  font-size: 13px;
+  line-height: 1.5;
+  border-radius: 10px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+  opacity: 0;
+  visibility: hidden;
+  transition: all 0.2s ease;
+  z-index: 100;
+  pointer-events: none;
+}
+.skill-card .skill-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 8px solid transparent;
+  border-top-color: #1d1d1f;
+}
+.skill-card:hover .skill-tooltip {
+  opacity: 1;
+  visibility: visible;
+}
+.skill-tooltip .tooltip-name {
+  font-weight: 600;
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+.skill-tooltip .tooltip-desc {
+  font-size: 13px;
+  opacity: 0.9;
 }
 
-.skill-empty {
-  grid-column: 1 / -1;
-  padding: 40px;
+.empty-hint {
   text-align: center;
+  padding: 32px;
   color: #86868b;
   font-size: 14px;
 }
 
-/* Tooltip */
-.tooltip {
-  position: fixed;
-  transform: translateX(-50%) translateY(-100%);
-  max-width: 200px;
-  padding: 10px 14px;
-  background: #1d1d1f;
-  border-radius: 10px;
-  z-index: 9999;
-  pointer-events: none;
-}
-
-.tooltip-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: white;
-  margin-bottom: 4px;
-}
-
-.tooltip-desc {
-  font-size: 12px;
-  color: #a1a1a6;
-  line-height: 1.4;
-}
-
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.15s;
-}
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
-
 /* Loading */
-.loading {
-  flex: 1;
+.loading-page {
+  height: calc(100vh - 64px);
   display: flex;
   align-items: center;
   justify-content: center;
+  background: #f5f5f7;
 }
-
 .spinner {
   width: 32px;
   height: 32px;
@@ -688,8 +841,5 @@ onMounted(() => loadData())
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
+@keyframes spin { to { transform: rotate(360deg); } }
 </style>

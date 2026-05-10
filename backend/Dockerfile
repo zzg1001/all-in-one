@@ -2,6 +2,13 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Install Chinese fonts for matplotlib charts
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    fonts-wqy-zenhei \
+    fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/* \
+    && fc-cache -fv
+
 # Install dependencies
 COPY requirements.txt .
 RUN pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple && \

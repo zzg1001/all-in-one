@@ -22,9 +22,9 @@ const toggleSidebar = () => {
 
 // AI 管理菜单
 const aiMenuItems = [
+  { path: '/models', icon: 'model', label: '模型配置' },
   { path: '/agent-manage', icon: 'agent', label: 'Agent 管理' },
   { path: '/skills', icon: 'skill', label: '技能管理' },
-  { path: '/models', icon: 'model', label: '模型配置' },
   { path: '/tokens', icon: 'token', label: 'Token 用量' },
 ]
 

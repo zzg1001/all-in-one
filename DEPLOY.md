@@ -122,6 +122,62 @@ docker exec -it ai-backend bash
 docker exec -it ai-mysql mysql -uroot -p
 ```
 
+## 宿主机已有 Nginx 的部署
+
+如果服务器上已经安装了 Nginx，需要让 Docker 内的 Nginx 使用非 80 端口，由宿主机 Nginx 反向代理。
+
+### 1. 修改 Docker Nginx 端口
+
+编辑 `docker-compose.prod.yml`，将 nginx 端口改为 8096：
+
+```yaml
+nginx:
+  ports:
+    - "8096:80"  # 改为非 80 端口
+```
+
+### 2. 配置宿主机 Nginx
+
+创建配置文件 `/etc/nginx/conf.d/ai-platform.conf`：
+
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;  # 改为你的域名
+
+    location / {
+        proxy_pass http://127.0.0.1:8096;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # SSE 流式响应支持
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 300s;
+    }
+}
+```
+
+### 3. 重载宿主机 Nginx
+
+```bash
+# 测试配置
+nginx -t
+
+# 重载配置
+nginx -s reload
+```
+
+### 4. 启动 Docker 服务
+
+```bash
+docker-compose -f docker-compose.prod.yml up -d --build
+```
+
+---
+
 ## HTTPS 配置（可选）
 
 ### 1. 准备 SSL 证书

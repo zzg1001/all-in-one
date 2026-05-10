@@ -2,7 +2,7 @@
 ProxyConfig Model - API 代理配置模型
 用于配置 Anthropic API 到其他模型（如 Qwen）的代理转换
 """
-from sqlalchemy import Column, String, Integer, Boolean, Text, DateTime
+from sqlalchemy import Column, String, Integer, Float, Boolean, Text, DateTime
 from datetime import datetime
 
 from app.core.database import Base
@@ -35,7 +35,7 @@ class ProxyConfig(Base):
 
     # 参数配置
     max_tokens = Column(Integer, default=4096, comment="默认最大 Token")
-    temperature = Column(Integer, default=0.7, comment="默认温度")
+    temperature = Column(Float, default=0.7, comment="默认温度")
 
     # 状态
     is_enabled = Column(Boolean, default=False, comment="是否启用")

@@ -28,13 +28,16 @@ interface ProxyStatus {
   running_config_name: string | null
 }
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8001'
+// API_BASE: 生产环境是 /api，开发环境是 http://localhost:8001/api
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8001/api'
 const proxyConfigs = ref<ProxyConfig[]>([])
 const proxyStatus = ref<ProxyStatus | null>(null)
 const proxyLoading = ref(false)
 const showProxyModal = ref(false)
 const isProxyEditing = ref(false)
 const showProxyApiKey = ref(false)
+const showProxyViewModal = ref(false)
+const viewingProxyConfig = ref<ProxyConfig | null>(null)
 
 const proxyForm = ref({
   id: '',
@@ -210,6 +213,11 @@ function openProxyCreateModal() {
     temperature: 0.7
   }
   showProxyModal.value = true
+}
+
+function openProxyViewModal(config: ProxyConfig) {
+  viewingProxyConfig.value = config
+  showProxyViewModal.value = true
 }
 
 function openProxyEditModal(config: ProxyConfig) {
@@ -511,72 +519,79 @@ onMounted(() => {
     </div>
 
     <!-- ========== 模型配置 Tab ========== -->
-    <div v-show="activeTab === 'models'">
-    <!-- 顶部操作栏 -->
-    <div class="page-header">
-      <div class="header-info">
-        <p class="page-desc">管理 AI 模型的 API 配置，支持多配置快速切换</p>
-        <div class="active-badge" v-if="activeConfig">
-          <span class="dot"></span>
-          当前启用: {{ activeConfig.name }}
+    <div v-show="activeTab === 'models'" class="tab-content">
+      <!-- 内容卡片 -->
+      <div class="content-card">
+        <!-- 顶部操作栏 -->
+        <div class="card-section header-section">
+          <div class="header-info">
+            <h2 class="section-title">模型配置管理</h2>
+            <p class="page-desc">管理 AI 模型的 API 配置，支持多配置快速切换</p>
+            <div class="active-badge" v-if="activeConfig">
+              <span class="dot"></span>
+              当前启用: {{ activeConfig.name }}
+            </div>
+          </div>
+          <div class="header-actions">
+            <div class="search-box">
+              <svg class="search-icon" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd"/>
+              </svg>
+              <input v-model="searchQuery" type="text" placeholder="搜索配置..." />
+            </div>
+            <button class="btn-secondary" @click="openImport">
+              <svg viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"/>
+              </svg>
+              导入
+            </button>
+            <button class="btn-secondary" @click="exportAll">
+              <svg viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clip-rule="evenodd"/>
+              </svg>
+              导出全部
+            </button>
+            <button class="btn-primary" @click="openEdit()">
+              <svg viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd"/>
+              </svg>
+              新建配置
+            </button>
+          </div>
         </div>
-      </div>
-      <div class="header-actions">
-        <div class="search-box">
-          <svg class="search-icon" viewBox="0 0 20 20" fill="currentColor">
-            <path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd"/>
-          </svg>
-          <input v-model="searchQuery" type="text" placeholder="搜索配置..." />
-        </div>
-        <button class="btn-secondary" @click="openImport">
-          <svg viewBox="0 0 20 20" fill="currentColor">
-            <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"/>
-          </svg>
-          导入
-        </button>
-        <button class="btn-secondary" @click="exportAll">
-          <svg viewBox="0 0 20 20" fill="currentColor">
-            <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clip-rule="evenodd"/>
-          </svg>
-          导出全部
-        </button>
-        <button class="btn-primary" @click="openEdit()">
-          <svg viewBox="0 0 20 20" fill="currentColor">
-            <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd"/>
-          </svg>
-          新建配置
-        </button>
-      </div>
-    </div>
 
-    <!-- 统计卡片 -->
-    <div class="stats-row">
-      <div class="stat-card">
-        <div class="stat-icon blue">
-          <svg viewBox="0 0 20 20" fill="currentColor">
-            <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3zM6 8a2 2 0 11-4 0 2 2 0 014 0zM16 18v-3a5.972 5.972 0 00-.75-2.906A3.005 3.005 0 0119 15v3h-3zM4.75 12.094A5.973 5.973 0 004 15v3H1v-3a3 3 0 013.75-2.906z"/>
-          </svg>
+        <!-- 统计卡片 -->
+        <div class="card-section stats-section">
+          <div class="stats-row">
+            <div class="stat-card">
+              <div class="stat-icon blue">
+                <svg viewBox="0 0 20 20" fill="currentColor">
+                  <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3zM6 8a2 2 0 11-4 0 2 2 0 014 0zM16 18v-3a5.972 5.972 0 00-.75-2.906A3.005 3.005 0 0119 15v3h-3zM4.75 12.094A5.973 5.973 0 004 15v3H1v-3a3 3 0 013.75-2.906z"/>
+                </svg>
+              </div>
+              <div class="stat-content">
+                <span class="stat-value">{{ stats.total }}</span>
+                <span class="stat-label">总配置数</span>
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon green">
+                <svg viewBox="0 0 20 20" fill="currentColor">
+                  <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                </svg>
+              </div>
+              <div class="stat-content">
+                <span class="stat-value">{{ stats.active }}</span>
+                <span class="stat-label">已启用</span>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="stat-content">
-          <span class="stat-value">{{ stats.total }}</span>
-          <span class="stat-label">总配置数</span>
-        </div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-icon green">
-          <svg viewBox="0 0 20 20" fill="currentColor">
-            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
-          </svg>
-        </div>
-        <div class="stat-content">
-          <span class="stat-value">{{ stats.active }}</span>
-          <span class="stat-label">已启用</span>
-        </div>
-      </div>
-    </div>
 
-    <!-- 配置列表 -->
-    <div class="config-list">
+        <!-- 配置列表 -->
+        <div class="card-section list-section">
+          <h3 class="list-title">配置列表</h3>
+          <div class="config-list">
       <div v-if="loading" class="loading-state">
         <div class="spinner"></div>
         <span>加载中...</span>
@@ -698,6 +713,9 @@ onMounted(() => {
           </div>
         </div>
       </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- 编辑弹框 -->
@@ -805,7 +823,7 @@ onMounted(() => {
               </svg>
               {{ testingDirect ? '测试中...' : '测试连接' }}
             </button>
-            <button class="btn-primary" @click="saveConfig" :disabled="!testDirectPassed">保存</button>
+            <button class="btn-primary" @click="saveConfig">保存</button>
           </div>
           <div v-if="testDirectResult" class="test-direct-result" :class="testDirectResult.success ? 'success' : 'error'">
             {{ testDirectResult.message }}
@@ -840,50 +858,51 @@ onMounted(() => {
         </div>
       </div>
     </Teleport>
-    </div><!-- End models tab -->
 
     <!-- ========== API 代理 Tab ========== -->
-    <div v-show="activeTab === 'proxy'" class="proxy-tab">
-      <!-- 运行状态卡片 -->
-      <div class="proxy-status-card" :class="{ running: proxyStatus?.is_running }">
-        <div class="status-content">
-          <div class="status-indicator">
+    <div v-show="activeTab === 'proxy'" class="tab-content">
+      <div class="content-card">
+        <!-- 状态区域 -->
+        <div class="card-section header-section">
+          <h2 class="section-title">API 代理管理</h2>
+          <p class="page-desc">将其他大模型 API 转换为 Anthropic 格式，支持 Claude Code 等工具使用</p>
+          <!-- 运行状态 -->
+          <div class="proxy-status-inline" :class="{ running: proxyStatus?.is_running }">
             <span class="dot" :class="proxyStatus?.is_running ? 'running' : 'stopped'"></span>
-            <span class="status-label">{{ proxyStatus?.is_running ? '运行中' : '已停止' }}</span>
+            <span class="status-text">{{ proxyStatus?.is_running ? '运行中' : '已停止' }}</span>
+            <template v-if="proxyStatus?.is_running">
+              <span class="divider">|</span>
+              <span class="status-detail">{{ proxyStatus.running_config_name }}</span>
+              <span class="status-detail clickable" @click="copyToClipboard(proxyStatus.proxy_model || '', '代理模型')">
+                {{ proxyStatus.proxy_model }}
+                <svg viewBox="0 0 20 20" fill="currentColor"><path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z"/><path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z"/></svg>
+              </span>
+              <span class="status-detail clickable" @click="copyToClipboard(proxyStatus.proxy_url || '', '代理地址')">
+                {{ proxyStatus.proxy_url }}
+                <svg viewBox="0 0 20 20" fill="currentColor"><path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z"/><path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z"/></svg>
+              </span>
+            </template>
           </div>
-          <template v-if="proxyStatus?.is_running">
-            <div class="status-info">
-              <span class="info-label">配置:</span>
-              <span class="info-value">{{ proxyStatus.running_config_name }}</span>
-            </div>
-            <div class="status-info clickable" @click="copyToClipboard(proxyStatus.proxy_model || '', '代理模型')">
-              <span class="info-label">代理模型:</span>
-              <span class="info-value proxy-url">{{ proxyStatus.proxy_model }}</span>
-              <svg viewBox="0 0 20 20" fill="currentColor"><path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z"/><path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z"/></svg>
-            </div>
-            <div class="status-info clickable" @click="copyToClipboard(proxyStatus.proxy_url || '', '代理地址')">
-              <span class="info-label">代理地址:</span>
-              <span class="info-value proxy-url">{{ proxyStatus.proxy_url }}</span>
-              <svg viewBox="0 0 20 20" fill="currentColor"><path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z"/><path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z"/></svg>
-            </div>
-          </template>
         </div>
-      </div>
 
-      <!-- 工具栏 -->
-      <div class="proxy-toolbar">
-        <button class="btn-primary" @click="openProxyCreateModal">
-          <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd"/></svg>
-          新建配置
-        </button>
-        <button class="btn-secondary" @click="fetchProxyConfigs">
-          <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1z" clip-rule="evenodd"/></svg>
-          刷新
-        </button>
-      </div>
+        <!-- 工具栏和列表 -->
+        <div class="card-section list-section">
+          <div class="proxy-toolbar">
+            <h3 class="list-title">代理配置列表</h3>
+            <div class="toolbar-actions">
+              <button class="btn-secondary" @click="fetchProxyConfigs">
+                <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1z" clip-rule="evenodd"/></svg>
+                刷新
+              </button>
+              <button class="btn-primary" @click="openProxyCreateModal">
+                <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd"/></svg>
+                新建配置
+              </button>
+            </div>
+          </div>
 
-      <!-- 配置列表 -->
-      <div class="proxy-list">
+          <!-- 配置列表 -->
+          <div class="proxy-list">
         <div v-if="proxyLoading" class="loading-state"><div class="spinner"></div><span>加载中...</span></div>
         <div v-else-if="proxyConfigs.length === 0" class="empty-state">
           <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 4a2 2 0 00-2 2v4a2 2 0 002 2V6h10a2 2 0 00-2-2H4zm2 6a2 2 0 012-2h8a2 2 0 012 2v4a2 2 0 01-2 2H8a2 2 0 01-2-2v-4z" clip-rule="evenodd"/></svg>
@@ -898,6 +917,7 @@ onMounted(() => {
                 <span class="status-badge" :class="config.is_running ? 'running' : 'stopped'">{{ config.is_running ? '运行中' : '已停止' }}</span>
               </div>
               <div class="card-actions">
+                <button class="icon-btn" @click="openProxyViewModal(config)" title="查看详情"><svg viewBox="0 0 20 20" fill="currentColor"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z"/><path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd"/></svg></button>
                 <button v-if="config.is_running" class="icon-btn" @click="restartProxy(config)" title="重启"><svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/></svg></button>
                 <button class="icon-btn" :class="{ disabled: config.is_running }" :disabled="config.is_running" @click="openProxyEditModal(config)" :title="config.is_running ? '运行中无法编辑，请先停止' : '编辑'"><svg viewBox="0 0 20 20" fill="currentColor"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/></svg></button>
                 <button class="icon-btn danger" :class="{ disabled: config.is_running }" :disabled="config.is_running" @click="deleteProxyConfig(config)" :title="config.is_running ? '运行中无法删除，请先停止' : '删除'"><svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg></button>
@@ -916,10 +936,13 @@ onMounted(() => {
             </div>
           </div>
         </div>
+          </div>
+        </div>
       </div>
+    </div>
 
-      <!-- 代理配置弹框 -->
-      <Teleport to="body">
+    <!-- 代理配置弹框 -->
+    <Teleport to="body">
         <div v-if="showProxyModal" class="modal-overlay" @click.self="showProxyModal = false">
           <div class="modal">
             <div class="modal-header">
@@ -995,7 +1018,104 @@ onMounted(() => {
           </div>
         </div>
       </Teleport>
-    </div><!-- End proxy tab -->
+
+      <!-- 代理配置查看弹窗 -->
+      <Teleport to="body">
+        <div v-if="showProxyViewModal" class="modal-overlay" @click.self="showProxyViewModal = false">
+          <div class="modal view-modal">
+            <div class="modal-header">
+              <h3>查看代理配置</h3>
+              <button class="close-btn" @click="showProxyViewModal = false">
+                <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
+              </button>
+            </div>
+            <div class="modal-body" v-if="viewingProxyConfig">
+              <div class="view-sections">
+                <!-- 基本信息 -->
+                <div class="view-section">
+                  <div class="view-section-title">基本信息</div>
+                  <div class="view-grid">
+                    <div class="view-item">
+                      <span class="view-label">配置名称</span>
+                      <span class="view-value">{{ viewingProxyConfig.name }}</span>
+                    </div>
+                    <div class="view-item">
+                      <span class="view-label">描述</span>
+                      <span class="view-value">{{ viewingProxyConfig.description || '-' }}</span>
+                    </div>
+                    <div class="view-item">
+                      <span class="view-label">状态</span>
+                      <span class="view-value">
+                        <span :class="['status-tag', viewingProxyConfig.is_running ? 'running' : 'stopped']">
+                          {{ viewingProxyConfig.is_running ? '运行中' : '已停止' }}
+                        </span>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 代理配置（对外） -->
+                <div class="view-section">
+                  <div class="view-section-title">代理配置（对外 - 客户端使用）</div>
+                  <div class="view-grid">
+                    <div class="view-item">
+                      <span class="view-label">代理端口</span>
+                      <span class="view-value">{{ viewingProxyConfig.proxy_port }}</span>
+                    </div>
+                    <div class="view-item">
+                      <span class="view-label">对外模型名</span>
+                      <span class="view-value copy-value" @click="copyToClipboard(viewingProxyConfig.proxy_model, '代理模型名')" title="点击复制">
+                        {{ viewingProxyConfig.proxy_model }}
+                        <svg viewBox="0 0 20 20" fill="currentColor" class="copy-icon"><path d="M8 2a1 1 0 000 2h2a1 1 0 100-2H8z"/><path d="M3 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v6h-4.586l1.293-1.293a1 1 0 00-1.414-1.414l-3 3a1 1 0 000 1.414l3 3a1 1 0 001.414-1.414L10.414 13H15v3a2 2 0 01-2 2H5a2 2 0 01-2-2V5z"/></svg>
+                      </span>
+                    </div>
+                    <div class="view-item full-width">
+                      <span class="view-label">代理地址</span>
+                      <span class="view-value copy-value" @click="copyToClipboard(`http://localhost:${viewingProxyConfig.proxy_port}`, '代理地址')" title="点击复制">
+                        http://localhost:{{ viewingProxyConfig.proxy_port }}
+                        <svg viewBox="0 0 20 20" fill="currentColor" class="copy-icon"><path d="M8 2a1 1 0 000 2h2a1 1 0 100-2H8z"/><path d="M3 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v6h-4.586l1.293-1.293a1 1 0 00-1.414-1.414l-3 3a1 1 0 000 1.414l3 3a1 1 0 001.414-1.414L10.414 13H15v3a2 2 0 01-2 2H5a2 2 0 01-2-2V5z"/></svg>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 原始 API 配置 -->
+                <div class="view-section">
+                  <div class="view-section-title">原始 API 配置（后端实际调用）</div>
+                  <div class="view-grid">
+                    <div class="view-item full-width">
+                      <span class="view-label">原始 API 地址</span>
+                      <span class="view-value copy-value" @click="copyToClipboard(viewingProxyConfig.target_base_url, 'API 地址')" title="点击复制">
+                        {{ viewingProxyConfig.target_base_url }}
+                        <svg viewBox="0 0 20 20" fill="currentColor" class="copy-icon"><path d="M8 2a1 1 0 000 2h2a1 1 0 100-2H8z"/><path d="M3 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v6h-4.586l1.293-1.293a1 1 0 00-1.414-1.414l-3 3a1 1 0 000 1.414l3 3a1 1 0 001.414-1.414L10.414 13H15v3a2 2 0 01-2 2H5a2 2 0 01-2-2V5z"/></svg>
+                      </span>
+                    </div>
+                    <div class="view-item">
+                      <span class="view-label">原始模型</span>
+                      <span class="view-value">{{ viewingProxyConfig.target_model }}</span>
+                    </div>
+                    <div class="view-item">
+                      <span class="view-label">API Key</span>
+                      <span class="view-value masked">{{ viewingProxyConfig.target_api_key ? '••••••••••••' + viewingProxyConfig.target_api_key.slice(-4) : '-' }}</span>
+                    </div>
+                    <div class="view-item">
+                      <span class="view-label">Max Tokens</span>
+                      <span class="view-value">{{ viewingProxyConfig.max_tokens || '默认' }}</span>
+                    </div>
+                    <div class="view-item">
+                      <span class="view-label">Temperature</span>
+                      <span class="view-value">{{ viewingProxyConfig.temperature ?? '默认' }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn-primary" @click="showProxyViewModal = false">关闭</button>
+            </div>
+          </div>
+        </div>
+      </Teleport>
 
     <!-- Toast 提示 -->
     <Teleport to="body">
@@ -1014,6 +1134,62 @@ onMounted(() => {
 .models-page {
   padding: 24px;
   max-width: 1400px;
+  background: #f5f7fa;
+  min-height: calc(100vh - 64px);
+}
+
+/* Tab 内容区域 */
+.tab-content {
+  animation: fadeIn 0.2s ease;
+}
+
+/* 内容卡片容器 */
+.content-card {
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.06);
+  overflow: hidden;
+}
+
+/* 卡片区域 */
+.card-section {
+  padding: 20px 24px;
+}
+
+.card-section + .card-section {
+  border-top: 1px solid #e5e7eb;
+}
+
+/* 头部区域 */
+.header-section {
+  background: linear-gradient(135deg, #fafbfc 0%, #f5f7fa 100%);
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.section-title {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+/* 统计区域 */
+.stats-section {
+  background: #fafbfc;
+}
+
+/* 列表区域 */
+.list-section {
+  padding-top: 16px;
+}
+
+.list-title {
+  margin: 0 0 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 /* 头部 */
@@ -1021,7 +1197,6 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  margin-bottom: 24px;
   gap: 24px;
   flex-wrap: wrap;
 }
@@ -1147,7 +1322,6 @@ onMounted(() => {
 .stats-row {
   display: flex;
   gap: 16px;
-  margin-bottom: 24px;
 }
 
 .stat-card {
@@ -1157,7 +1331,7 @@ onMounted(() => {
   padding: 16px 20px;
   background: white;
   border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  border: 1px solid #e5e7eb;
   min-width: 160px;
 }
 
@@ -1205,7 +1379,7 @@ onMounted(() => {
 
 /* 配置列表 */
 .config-list {
-  min-height: 300px;
+  min-height: 200px;
 }
 
 .loading-state, .empty-state {
@@ -1252,22 +1426,25 @@ onMounted(() => {
 .config-card {
   background: white;
   border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  border: 1px solid #e5e7eb;
   overflow: hidden;
   position: relative;
   transition: all 0.2s;
 }
 
 .config-card:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  border-color: #d1d5db;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
 .config-card.active {
   border: 2px solid #1677ff;
+  box-shadow: 0 0 0 3px rgba(22, 119, 255, 0.1);
 }
 
 .config-card.inactive {
-  opacity: 0.7;
+  opacity: 0.75;
+  background: #fafbfc;
 }
 
 .card-header {
@@ -1660,7 +1837,7 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 14px 24px;
+  padding: 10px 20px;
   border-bottom: 1px solid #e5e7eb;
 }
 
@@ -1692,14 +1869,14 @@ onMounted(() => {
 }
 
 .modal-body {
-  padding: 16px 24px;
+  padding: 12px 20px;
 }
 
 .modal-footer {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  padding: 12px 24px;
+  padding: 8px 20px;
   background: #f9fafb;
   border-top: 1px solid #e5e7eb;
 }
@@ -1808,13 +1985,13 @@ onMounted(() => {
 .form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  gap: 8px;
 }
 
 .form-group {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .form-group.full {
@@ -1847,7 +2024,7 @@ onMounted(() => {
 .form-group input,
 .form-group select,
 .form-group textarea {
-  padding: 8px 10px;
+  padding: 6px 8px;
   border: 1px solid #e5e7eb;
   border-radius: 6px;
   font-size: 13px;
@@ -1864,7 +2041,7 @@ onMounted(() => {
 
 .form-group textarea {
   resize: vertical;
-  min-height: 80px;
+  min-height: 50px;
   font-family: inherit;
 }
 
@@ -2006,12 +2183,13 @@ onMounted(() => {
 /* ========== Tab 切换样式 ========== */
 .tabs-header {
   display: flex;
-  gap: 8px;
-  margin-bottom: 24px;
+  gap: 4px;
+  margin-bottom: 20px;
   background: white;
-  padding: 6px;
+  padding: 4px;
   border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  border: 1px solid #e5e7eb;
   width: fit-content;
 }
 
@@ -2019,8 +2197,8 @@ onMounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 20px;
-  border-radius: 8px;
+  padding: 10px 24px;
+  border-radius: 10px;
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
@@ -2039,6 +2217,7 @@ onMounted(() => {
 .tab-btn.active {
   background: #1677ff;
   color: white;
+  box-shadow: 0 2px 4px rgba(22, 119, 255, 0.3);
 }
 
 .tab-btn svg {
@@ -2059,8 +2238,66 @@ onMounted(() => {
 }
 
 /* ========== 代理 Tab 样式 ========== */
-.proxy-tab {
-  animation: fadeIn 0.2s ease;
+/* 代理状态行内显示 */
+.proxy-status-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 8px 16px;
+  background: #f3f4f6;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.proxy-status-inline.running {
+  background: #ecfdf5;
+}
+
+.proxy-status-inline .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #9ca3af;
+}
+
+.proxy-status-inline .dot.running {
+  background: #10b981;
+  animation: pulse 2s infinite;
+}
+
+.proxy-status-inline .dot.stopped {
+  background: #9ca3af;
+}
+
+.proxy-status-inline .status-text {
+  font-weight: 500;
+  color: #374151;
+}
+
+.proxy-status-inline .divider {
+  color: #d1d5db;
+}
+
+.proxy-status-inline .status-detail {
+  color: #6b7280;
+}
+
+.proxy-status-inline .status-detail.clickable {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  color: #1677ff;
+}
+
+.proxy-status-inline .status-detail.clickable:hover {
+  text-decoration: underline;
+}
+
+.proxy-status-inline .status-detail svg {
+  width: 14px;
+  height: 14px;
 }
 
 @keyframes fadeIn {
@@ -2162,13 +2399,23 @@ onMounted(() => {
 /* 代理工具栏 */
 .proxy-toolbar {
   display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.proxy-toolbar .list-title {
+  margin: 0;
+}
+
+.toolbar-actions {
+  display: flex;
   gap: 12px;
-  margin-bottom: 24px;
 }
 
 /* 代理列表 */
 .proxy-list {
-  min-height: 300px;
+  min-height: 200px;
 }
 
 .proxy-grid {
@@ -2180,18 +2427,20 @@ onMounted(() => {
 .proxy-card {
   background: white;
   border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  border: 1px solid #e5e7eb;
   overflow: hidden;
   position: relative;
   transition: all 0.2s;
 }
 
 .proxy-card:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  border-color: #d1d5db;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
 .proxy-card.active {
   border: 2px solid #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.1);
 }
 
 .proxy-card .status-badge.running {
@@ -2352,5 +2601,115 @@ onMounted(() => {
 .url-input:focus {
   outline: none;
   box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.2);
+}
+
+/* 查看弹窗样式 */
+.view-modal {
+  max-width: 600px;
+}
+
+.view-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.view-section {
+  background: #fafbfc;
+  border-radius: 8px;
+  padding: 16px;
+  border: 1px solid #e5e7eb;
+}
+
+.view-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.view-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.view-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.view-item.full-width {
+  grid-column: 1 / -1;
+}
+
+.view-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.view-value {
+  font-size: 14px;
+  color: #1f2937;
+  word-break: break-all;
+}
+
+.view-value.masked {
+  font-family: 'SF Mono', monospace;
+  color: #9ca3af;
+}
+
+.view-value.copy-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: #f3f4f6;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: 'SF Mono', monospace;
+  font-size: 13px;
+}
+
+.view-value.copy-value:hover {
+  background: #e5e7eb;
+  color: #1677ff;
+}
+
+.view-value .copy-icon {
+  width: 14px;
+  height: 14px;
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+
+.view-value.copy-value:hover .copy-icon {
+  opacity: 1;
+}
+
+.view-value .status-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.view-value .status-tag.running {
+  background: #ecfdf5;
+  color: #059669;
+}
+
+.view-value .status-tag.stopped {
+  background: #f3f4f6;
+  color: #6b7280;
 }
 </style>

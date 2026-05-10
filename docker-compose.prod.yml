@@ -5,8 +5,6 @@
 #
 # 包含: MySQL + Backend + Portal + Admin + Nginx
 
-version: '3.8'
-
 services:
   # ========== MySQL 数据库 ==========
   mysql:
@@ -78,6 +76,7 @@ services:
       dockerfile: Dockerfile
       args:
         - VITE_API_BASE_URL=/api
+        - VITE_PORTAL_URL=/
     container_name: ai-admin
     restart: always
     networks:
@@ -91,8 +90,8 @@ services:
     container_name: ai-nginx
     restart: always
     ports:
-      - "8096:80"
-      # - "8443:443"  # 如需 HTTPS
+      - "80:80"
+      # - "443:443"  # 如需 HTTPS
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
