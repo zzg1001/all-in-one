@@ -37,8 +37,8 @@ services:
       dockerfile: Dockerfile
     container_name: ai-backend
     restart: always
-    # ports:
-    #   - "8001:8001"  # 不对外暴露，统一走 nginx 网关
+    ports:
+      - "4000:4000"    # API 代理端口
     env_file:
       - ./deploy.env
     environment:
