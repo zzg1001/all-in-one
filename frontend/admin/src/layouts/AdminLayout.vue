@@ -66,7 +66,7 @@ const isActive = (path: string) => {
     <!-- 侧边栏 -->
     <aside class="admin-sidebar" :class="{ collapsed: sidebarCollapsed }">
       <div class="sidebar-header">
-        <a :href="config.portalUrl" class="logo" title="返回首页">
+        <a :href="config.portalUrl" class="logo" title="返回首页" target="_blank">
           <div class="logo-icon">IK</div>
           <span v-if="!sidebarCollapsed" class="logo-text">Admin</span>
         </a>
