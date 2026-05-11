@@ -37,8 +37,8 @@ services:
       dockerfile: Dockerfile
     container_name: ai-backend
     restart: always
-    ports:
-      - "8001:8001"
+    # ports:
+    #   - "8001:8001"  # 不对外暴露，统一走 nginx 网关
     env_file:
       - ./deploy.env
     environment:
@@ -90,7 +90,7 @@ services:
     container_name: ai-nginx
     restart: always
     ports:
-      - "80:80"
+      - "8096:80"
       # - "443:443"  # 如需 HTTPS
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
