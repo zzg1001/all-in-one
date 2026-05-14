@@ -129,6 +129,21 @@ async function saveProxyConfig() {
 }
 
 async function deleteProxyConfig(config: ProxyConfig) {
+  // 检查是否被模型配置引用
+  const referencedBy = configs.value.filter(m =>
+    m.base_url && (
+      m.base_url === config.proxy_url ||
+      m.base_url.includes(`localhost:${config.proxy_port}`) ||
+      m.base_url.includes(`127.0.0.1:${config.proxy_port}`)
+    )
+  )
+
+  if (referencedBy.length > 0) {
+    const names = referencedBy.map(m => `"${m.name}"`).join('、')
+    showToast('error', `无法删除：该代理被模型配置 ${names} 引用中`)
+    return
+  }
+
   if (!confirm(`确定删除配置 "${config.name}"？`)) return
   try {
     const res = await fetch(`${API_BASE}/proxy/configs/${config.id}`, { method: 'DELETE' })
@@ -244,6 +259,35 @@ function copyProxyUrl() {
     navigator.clipboard.writeText(proxyStatus.value.proxy_url)
     showToast('success', '已复制代理地址')
   }
+}
+
+// 应用代理配置到模型配置
+function applyProxyToModel(config: ProxyConfig) {
+  // 切换到模型配置 tab
+  activeTab.value = 'models'
+
+  // 打开新建模型配置弹框，并自动填充代理信息
+  testingDirect.value = false
+  testDirectResult.value = null
+  testDirectPassed.value = false
+  showApiKey.value = false
+  useCustomModel.value = true  // 使用自定义模型
+
+  editingConfig.value = {
+    name: `${config.name} - 模型配置`,
+    description: `通过代理 ${config.name} 连接`,
+    api_type: 'claude_sdk',
+    model_id: config.proxy_model,  // 代理对外模型名
+    api_key: 'proxy-no-key-needed',  // 代理不需要真实 key
+    base_url: config.proxy_url,  // 代理地址
+    max_tokens: config.max_tokens || 4096,
+    temperature: config.temperature ?? 0.7,
+    top_p: 1.0,
+    system_prompt: '',
+  }
+  showEditModal.value = true
+
+  showToast('success', '已填充代理配置，请确认后保存')
 }
 
 // ========== 模型配置相关 ==========
@@ -933,6 +977,11 @@ onMounted(() => {
             <div class="card-footer">
               <button v-if="!config.is_running" class="btn-start" @click="startProxy(config)">启动代理</button>
               <button v-else class="btn-stop" @click="stopProxy(config)">停止代理</button>
+            </div>
+            <!-- 悬浮时显示的应用按钮 -->
+            <div class="card-hover-action" @click.stop="applyProxyToModel(config)">
+              <span>应用到模型配置</span>
+              <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
             </div>
           </div>
         </div>
@@ -2486,6 +2535,56 @@ onMounted(() => {
 
 .btn-stop:hover {
   background: #fecaca;
+}
+
+/* 卡片悬浮时显示的应用按钮 */
+.card-hover-action {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0.9);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  background: rgba(255, 255, 255, 0.95);
+  color: #3b82f6;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  transition: all 0.2s ease;
+  z-index: 10;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  border: 1px solid #e5e7eb;
+}
+
+.card-hover-action svg {
+  width: 18px;
+  height: 18px;
+}
+
+.card-hover-action:hover {
+  background: #3b82f6;
+  color: white;
+  border-color: #3b82f6;
+}
+
+.proxy-card:hover .card-hover-action {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.proxy-card:hover::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.03);
+  z-index: 5;
+  pointer-events: none;
 }
 
 /* 表单提示 */
