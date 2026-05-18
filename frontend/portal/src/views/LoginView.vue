@@ -13,10 +13,11 @@ const showPassword = ref(false)
 const isLoading = ref(false)
 const errorMessage = ref('')
 
-// 如果已登录，跳转回去
+// 如果已登录，根据角色跳转
 onMounted(async () => {
   if (authStore.isAuthenticated) {
-    const redirect = route.query.redirect as string || '/'
+    // 如果有明确的 redirect 参数，使用它；否则根据角色跳转
+    const redirect = route.query.redirect as string || authStore.getDefaultRedirect()
     router.replace(redirect)
   }
 })
@@ -33,7 +34,8 @@ async function handleLogin() {
   const success = await authStore.login(username.value, password.value)
 
   if (success) {
-    const redirect = route.query.redirect as string || '/'
+    // 如果有明确的 redirect 参数，使用它；否则根据角色跳转
+    const redirect = route.query.redirect as string || authStore.getDefaultRedirect()
     router.replace(redirect)
   } else {
     errorMessage.value = authStore.error || '登录失败'

@@ -232,6 +232,35 @@ export const useAuthStore = defineStore('auth', () => {
     return {}
   }
 
+  // 部门到主题颜色的映射
+  const departmentThemeMap: Record<string, string> = {
+    'HR': 'blue',
+    '销售': 'purple',
+    '采购': 'cyan',
+    '行政': 'orange',
+    '财务': 'green',
+  }
+
+  // 获取用户登录后的默认跳转页面
+  function getDefaultRedirect(): string {
+    if (!user.value) return '/'
+
+    // admin 和 boss 跳转首页（可以访问所有 Agent）
+    if (user.value.role === 'admin' || user.value.role === 'boss') {
+      return '/'
+    }
+
+    // 普通用户跳转到对应部门的 Agent 对话页面
+    if (user.value.department) {
+      const agentName = `${user.value.department}部门 Agent`
+      const theme = departmentThemeMap[user.value.department] || 'blue'
+      return `/app?from=login&agent=${encodeURIComponent(agentName)}&theme=${theme}`
+    }
+
+    // 没有部门的用户跳转首页
+    return '/'
+  }
+
   return {
     // 状态
     token,
@@ -253,5 +282,6 @@ export const useAuthStore = defineStore('auth', () => {
     changePassword,
     canAccessAgent,
     getAuthHeader,
+    getDefaultRedirect,
   }
 })

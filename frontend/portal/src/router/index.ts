@@ -125,15 +125,51 @@ function getCookie(name: string): string | null {
   return match ? decodeURIComponent(match[2]) : null
 }
 
+// 部门到主题颜色的映射
+const departmentThemeMap: Record<string, string> = {
+  'HR': 'blue',
+  '销售': 'purple',
+  '采购': 'cyan',
+  '行政': 'orange',
+  '财务': 'green',
+}
+
+// 根据用户角色获取默认跳转页面
+function getDefaultRedirectFromCookie(): string {
+  const userCookie = getCookie('auth_user')
+  if (!userCookie) return '/'
+
+  try {
+    const user = JSON.parse(userCookie)
+
+    // admin 和 boss 跳转首页
+    if (user.role === 'admin' || user.role === 'boss') {
+      return '/'
+    }
+
+    // 普通用户跳转到对应部门的 Agent 对话页面
+    if (user.department) {
+      const agentName = `${user.department}部门 Agent`
+      const theme = departmentThemeMap[user.department] || 'blue'
+      return `/app?from=login&agent=${encodeURIComponent(agentName)}&theme=${theme}`
+    }
+  } catch (e) {
+    // 解析失败，跳转首页
+  }
+
+  return '/'
+}
+
 // 路由守卫
 router.beforeEach(async (to, _from, next) => {
   // 获取 token - 从 Cookie 读取 (SSO)
   const token = getCookie('auth_token')
   const isAuthenticated = !!token
 
-  // 如果是登录页，且已登录，跳转到首页
+  // 如果是登录页，且已登录，根据角色跳转
   if (to.name === 'login' && isAuthenticated) {
-    next({ name: 'home' })
+    const defaultRedirect = getDefaultRedirectFromCookie()
+    next(defaultRedirect)
     return
   }
 
