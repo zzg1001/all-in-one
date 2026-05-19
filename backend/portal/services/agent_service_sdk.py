@@ -994,27 +994,53 @@ class AgentSDKService:
                 try:
                     output_data = json.loads(stdout)
                 except json.JSONDecodeError:
-                    # 查找最后一个完整的 JSON 对象（从最后一个 { 开始）
-                    # 技能输出通常是：多行日志 + 最后一行 JSON
-                    json_start = stdout.rfind('{"success":')
+                    # 查找最后一个完整的 JSON 对象
+                    # 技能输出通常是：多行日志 + 最后的 JSON（可能是格式化的多行 JSON）
+
+                    # 方法1：从最后一个 { 开始尝试解析
+                    json_start = stdout.rfind('{\n  "success":')
+                    if json_start == -1:
+                        json_start = stdout.rfind('{"success":')
                     if json_start == -1:
                         json_start = stdout.rfind('{')
+
                     if json_start != -1:
                         try:
                             output_data = json.loads(stdout[json_start:])
                         except json.JSONDecodeError:
-                            # 尝试逐行查找 JSON
-                            for line in reversed(stdout.split('\n')):
-                                line = line.strip()
-                                if line.startswith('{') and line.endswith('}'):
-                                    try:
-                                        output_data = json.loads(line)
+                            # 方法2：尝试找到匹配的 { 和 } 对
+                            brace_count = 0
+                            json_end = -1
+                            for i in range(json_start, len(stdout)):
+                                if stdout[i] == '{':
+                                    brace_count += 1
+                                elif stdout[i] == '}':
+                                    brace_count -= 1
+                                    if brace_count == 0:
+                                        json_end = i + 1
                                         break
-                                    except json.JSONDecodeError:
-                                        continue
+
+                            if json_end != -1:
+                                try:
+                                    output_data = json.loads(stdout[json_start:json_end])
+                                except json.JSONDecodeError:
+                                    pass
+
+                    # 方法3：尝试逐行查找单行 JSON
+                    if not output_data:
+                        for line in reversed(stdout.split('\n')):
+                            line = line.strip()
+                            if line.startswith('{') and line.endswith('}'):
+                                try:
+                                    output_data = json.loads(line)
+                                    break
+                                except json.JSONDecodeError:
+                                    continue
 
                 if output_data:
+                    print(f"[AgentSDKService] output_data keys: {list(output_data.keys())}")
                     output_file_info = output_data.get("_output_file")
+                    print(f"[AgentSDKService] output_file_info: {output_file_info}")
 
                     if output_file_info:
                         original_path = output_file_info.get("path")

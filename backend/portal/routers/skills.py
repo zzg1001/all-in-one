@@ -875,6 +875,28 @@ async def sync_all_skills_from_remote(db: Session = Depends(get_db)):
     }
 
 
+@router.post("/discover")
+async def discover_skills_from_minio():
+    """
+    从 MinIO 发现并导入新技能
+
+    扫描 MinIO 中的所有技能文件夹，对于数据库中不存在的技能：
+    1. 解析 SKILL.md 或 config.json 获取元数据
+    2. 创建数据库记录
+    3. 同步文件到本地
+
+    这个 API 用于导入从其他环境上传到 MinIO 的技能
+    """
+    from portal.services.storage_sync_service import discover_and_import_skills_from_minio
+
+    result = await discover_and_import_skills_from_minio()
+
+    if not result["success"]:
+        raise HTTPException(status_code=500, detail=result.get("message", "导入失败"))
+
+    return result
+
+
 @router.post("/push-all")
 async def push_all_skills_to_remote(db: Session = Depends(get_db)):
     """

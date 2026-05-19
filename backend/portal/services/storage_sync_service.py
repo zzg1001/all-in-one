@@ -285,3 +285,252 @@ async def sync_skills_from_minio(skill_folders: List[str], force: bool = True) -
         "total_synced": total_synced,
         "details": details
     }
+
+
+def parse_skill_md(content: str) -> dict:
+    """
+    解析 SKILL.md 文件，提取 frontmatter 和标题
+
+    支持的 frontmatter 格式（YAML）：
+    ---
+    name: 技能名称
+    description: |
+      技能描述
+    output_config:
+      enabled: true
+      preferred_type: html
+    ---
+
+    Args:
+        content: SKILL.md 文件内容
+
+    Returns:
+        解析后的元数据字典
+    """
+    import yaml
+    import re
+
+    result = {
+        "name": None,
+        "description": None,
+        "icon": "⚡",
+        "tags": [],
+        "output_config": None,
+        "entry_script": "main.py",
+        "author": "minio_import",
+        "version": "1.0.0"
+    }
+
+    # 解析 YAML frontmatter
+    frontmatter_match = re.match(r'^---\s*\n(.*?)\n---\s*\n', content, re.DOTALL)
+    if frontmatter_match:
+        try:
+            frontmatter = yaml.safe_load(frontmatter_match.group(1))
+            if frontmatter:
+                result["name"] = frontmatter.get("name")
+                result["description"] = frontmatter.get("description", "").strip() if frontmatter.get("description") else None
+                result["icon"] = frontmatter.get("icon", "⚡")
+                result["tags"] = frontmatter.get("tags", [])
+                if frontmatter.get("output_config"):
+                    result["output_config"] = frontmatter["output_config"]
+        except yaml.YAMLError as e:
+            print(f"[ParseSkillMD] YAML 解析错误: {e}")
+
+    # 如果 frontmatter 中没有 name，从标题提取
+    if not result["name"]:
+        # 跳过 frontmatter 后的内容
+        body = content
+        if frontmatter_match:
+            body = content[frontmatter_match.end():]
+
+        # 查找第一个 # 标题
+        title_match = re.search(r'^#\s+(.+)$', body, re.MULTILINE)
+        if title_match:
+            result["name"] = title_match.group(1).strip()
+
+    # 如果还没有 description，从正文提取
+    if not result["description"]:
+        body = content
+        if frontmatter_match:
+            body = content[frontmatter_match.end():]
+
+        # 跳过标题，找第一段非空文本
+        lines = body.split('\n')
+        for line in lines:
+            line = line.strip()
+            if line and not line.startswith('#') and not line.startswith('-'):
+                result["description"] = line[:200]
+                break
+
+    return result
+
+
+async def discover_and_import_skills_from_minio() -> dict:
+    """
+    从 MinIO 发现并导入新技能到数据库
+
+    扫描 MinIO 中的所有技能文件夹，对于数据库中不存在的技能：
+    1. 下载 SKILL.md 或 config.json
+    2. 解析元数据
+    3. 创建数据库记录
+    4. 同步文件到本地
+
+    Returns:
+        {"success": bool, "imported": list, "skipped": list, "errors": list}
+    """
+    import json
+    import uuid
+
+    if not is_minio_storage("skills"):
+        return {"success": False, "message": "Skills 未配置 MinIO 存储", "imported": [], "skipped": [], "errors": []}
+
+    from app.core.database import SessionLocal
+    from portal.models.skill import Skill
+
+    storage = get_storage_backend("skills")
+    skills_dir = get_skills_storage_dir()
+
+    # 获取数据库中已存在的技能 folder_path
+    db = SessionLocal()
+    try:
+        existing_folders = set()
+        existing_skills = db.query(Skill.folder_path).filter(Skill.folder_path.isnot(None)).all()
+        for s in existing_skills:
+            if s.folder_path:
+                existing_folders.add(s.folder_path)
+
+        print(f"[DiscoverSkills] 数据库中已有 {len(existing_folders)} 个技能")
+
+        # 列出 MinIO 根目录下的所有"文件夹"
+        files = await storage.list_files("", recursive=False)
+        minio_folders = set()
+        for f in files:
+            if f.is_dir:
+                folder_name = f.name.rstrip('/')
+                minio_folders.add(folder_name)
+            elif '/' in f.path:
+                # 从文件路径提取顶级文件夹
+                folder_name = f.path.split('/')[0]
+                minio_folders.add(folder_name)
+
+        print(f"[DiscoverSkills] MinIO 中发现 {len(minio_folders)} 个技能文件夹")
+
+        # 找出 MinIO 中有但数据库中没有的技能
+        new_folders = minio_folders - existing_folders
+        print(f"[DiscoverSkills] 需要导入 {len(new_folders)} 个新技能")
+
+        imported = []
+        skipped = []
+        errors = []
+
+        for folder in new_folders:
+            try:
+                print(f"[DiscoverSkills] 处理: {folder}")
+
+                # 尝试读取 SKILL.md
+                skill_info = None
+                try:
+                    skill_md_content = await storage.read_file_text(f"{folder}/SKILL.md")
+                    skill_info = parse_skill_md(skill_md_content)
+                    print(f"[DiscoverSkills] 从 SKILL.md 解析: name={skill_info.get('name')}")
+                except FileNotFoundError:
+                    print(f"[DiscoverSkills] {folder}/SKILL.md 不存在，尝试 config.json")
+
+                # 如果没有 SKILL.md，尝试 config.json
+                if not skill_info or not skill_info.get("name"):
+                    try:
+                        config_content = await storage.read_file_text(f"{folder}/config.json")
+                        config = json.loads(config_content)
+                        skill_info = {
+                            "name": config.get("name", folder),
+                            "description": config.get("description"),
+                            "icon": config.get("icon", "⚡"),
+                            "tags": config.get("tags", []),
+                            "output_config": config.get("output_config"),
+                            "entry_script": config.get("entry_script", "main.py"),
+                            "author": config.get("author", "minio_import"),
+                            "version": config.get("version", "1.0.0")
+                        }
+                        print(f"[DiscoverSkills] 从 config.json 解析: name={skill_info.get('name')}")
+                    except FileNotFoundError:
+                        print(f"[DiscoverSkills] {folder}/config.json 也不存在")
+                        skill_info = {
+                            "name": folder,
+                            "description": None,
+                            "icon": "⚡",
+                            "tags": [],
+                            "output_config": None,
+                            "entry_script": "main.py",
+                            "author": "minio_import",
+                            "version": "1.0.0"
+                        }
+
+                if not skill_info.get("name"):
+                    skill_info["name"] = folder
+
+                # 检查入口脚本是否存在
+                entry_script = skill_info.get("entry_script", "main.py")
+                try:
+                    await storage.read_file(f"{folder}/{entry_script}")
+                except FileNotFoundError:
+                    # 尝试找其他 .py 文件
+                    folder_files = await storage.list_files(f"{folder}/", recursive=False)
+                    py_files = [f.name for f in folder_files if f.name.endswith('.py') and not f.is_dir]
+                    if py_files:
+                        entry_script = py_files[0]
+                    else:
+                        entry_script = None
+
+                # 创建数据库记录
+                skill = Skill(
+                    id=folder,  # 使用 MinIO 中的文件夹名作为 ID
+                    group_id=folder,
+                    name=skill_info["name"],
+                    description=skill_info.get("description"),
+                    icon=skill_info.get("icon", "⚡"),
+                    tags=skill_info.get("tags", []),
+                    folder_path=folder,
+                    entry_script=entry_script,
+                    author=skill_info.get("author", "minio_import"),
+                    version=skill_info.get("version", "1.0.0"),
+                    status="active",
+                    output_config=skill_info.get("output_config"),
+                    minio_synced=True  # 来自 MinIO，已同步
+                )
+
+                db.add(skill)
+                db.commit()
+                print(f"[DiscoverSkills] 数据库记录已创建: {skill_info['name']} ({folder})")
+
+                # 同步文件到本地
+                sync_result = await sync_skill_from_minio(folder, force=True)
+                print(f"[DiscoverSkills] 文件同步完成: {sync_result['synced_files']} 个文件")
+
+                imported.append({
+                    "folder": folder,
+                    "name": skill_info["name"],
+                    "synced_files": sync_result["synced_files"]
+                })
+
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                errors.append({
+                    "folder": folder,
+                    "error": str(e)
+                })
+
+        return {
+            "success": True,
+            "message": f"导入完成: {len(imported)} 成功, {len(skipped)} 跳过, {len(errors)} 错误",
+            "imported": imported,
+            "skipped": list(existing_folders & minio_folders),
+            "errors": errors
+        }
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "message": str(e), "imported": [], "skipped": [], "errors": []}
+    finally:
+        db.close()
