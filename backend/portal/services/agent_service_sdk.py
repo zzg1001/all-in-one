@@ -149,11 +149,12 @@ def _create_output_file_info(file_path: Path, file_type: str = None) -> Dict[str
         except Exception as e:
             print(f"[Output] 上传到存储失败: {e}, 使用本地路径")
 
+    import urllib.parse
     return {
         "path": str(file_path),
         "type": file_type,
         "name": file_path.name,
-        "url": f"/outputs/{file_path.name}",
+        "url": f"/outputs/{urllib.parse.quote(file_path.name)}",
         "size": file_path.stat().st_size,
         "storage": "local"
     }
@@ -1066,6 +1067,17 @@ class AgentSDKService:
                         print(f"[AgentSDKService] 技能输出: {clean_output[:100]}...")
                     except UnicodeEncodeError:
                         print(f"[AgentSDKService] 技能输出: {clean_output[:100].encode('utf-8', errors='replace').decode('utf-8')}...")
+
+                    # 确保 URL 编码（处理中文文件名）
+                    if output_file_info and output_file_info.get("url"):
+                        import urllib.parse
+                        url = output_file_info["url"]
+                        # 如果 URL 包含未编码的中文，进行编码
+                        if any(ord(c) > 127 for c in url):
+                            # 分离路径和文件名
+                            parts = url.rsplit("/", 1)
+                            if len(parts) == 2:
+                                output_file_info["url"] = f"{parts[0]}/{urllib.parse.quote(parts[1])}"
 
                     return {
                         "success": output_data.get("success", True),
