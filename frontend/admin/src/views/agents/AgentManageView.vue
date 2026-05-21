@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { agentsApi, type Agent } from '@/api'
 import Toast from '@/components/Toast.vue'
@@ -26,6 +26,7 @@ const filteredAgents = computed(() => {
 const stats = computed(() => ({
   total: agents.value.length,
   active: agents.value.filter(a => a.status === 'active').length,
+  inactive: agents.value.filter(a => a.status === 'inactive').length,
   draft: agents.value.filter(a => a.status === 'draft').length,
 }))
 
@@ -59,19 +60,56 @@ const deleteAgent = async (agent: Agent) => {
   }
 }
 
-const toggleStatus = async (agent: Agent) => {
-  const newStatus = agent.status === 'active' ? 'draft' : 'active'
+// 状态切换菜单
+const showStatusMenu = ref<string | null>(null)
+
+const toggleStatusMenu = (agentId: string, event: Event) => {
+  event.stopPropagation()
+  showStatusMenu.value = showStatusMenu.value === agentId ? null : agentId
+}
+
+const setStatus = async (agent: Agent, newStatus: string) => {
+  showStatusMenu.value = null
+  if (agent.status === newStatus) return
+
   try {
     await agentsApi.update(agent.id, { status: newStatus })
     const idx = agents.value.findIndex(a => a.id === agent.id)
     if (idx >= 0) agents.value[idx] = { ...agents.value[idx], status: newStatus }
-    toast.value?.show(newStatus === 'active' ? '已发布' : '已设为草稿', 'dark')
+
+    const statusLabels: Record<string, string> = {
+      active: '已发布',
+      inactive: '已设为不可用',
+      draft: '已设为草稿'
+    }
+    toast.value?.show(statusLabels[newStatus] || '已更新', 'dark')
   } catch (e) {
     toast.value?.error('更新失败')
   }
 }
 
-onMounted(() => loadAgents())
+const getStatusLabel = (status: string) => {
+  const labels: Record<string, string> = {
+    active: '已发布',
+    inactive: '不可用',
+    draft: '草稿'
+  }
+  return labels[status] || status
+}
+
+// 点击页面其他地方关闭状态菜单
+const closeStatusMenu = () => {
+  showStatusMenu.value = null
+}
+
+onMounted(() => {
+  loadAgents()
+  document.addEventListener('click', closeStatusMenu)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', closeStatusMenu)
+})
 </script>
 
 <template>
@@ -96,6 +134,10 @@ onMounted(() => loadAgents())
         <span class="stat-item">
           <span class="stat-dot active"></span>
           {{ stats.active }} 已发布
+        </span>
+        <span class="stat-item">
+          <span class="stat-dot inactive"></span>
+          {{ stats.inactive }} 不可用
         </span>
         <span class="stat-item">
           <span class="stat-dot draft"></span>
@@ -135,8 +177,31 @@ onMounted(() => loadAgents())
         >
           <div class="card-header">
             <span class="card-icon">{{ agent.icon || '🤖' }}</span>
-            <div class="card-status" :class="agent.status" @click.stop="toggleStatus(agent)">
-              {{ agent.status === 'active' ? '已发布' : '草稿' }}
+            <div class="status-wrapper">
+              <div class="card-status" :class="agent.status" @click.stop="toggleStatusMenu(agent.id, $event)">
+                {{ getStatusLabel(agent.status) }}
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <path d="m6 9 6 6 6-6"/>
+                </svg>
+              </div>
+              <!-- 状态下拉菜单 -->
+              <div v-if="showStatusMenu === agent.id" class="status-menu" @click.stop>
+                <div class="status-option active" @click="setStatus(agent, 'active')">
+                  <span class="status-dot"></span>
+                  已发布
+                  <span class="status-desc">展示且可用</span>
+                </div>
+                <div class="status-option inactive" @click="setStatus(agent, 'inactive')">
+                  <span class="status-dot"></span>
+                  不可用
+                  <span class="status-desc">展示但不可点击</span>
+                </div>
+                <div class="status-option draft" @click="setStatus(agent, 'draft')">
+                  <span class="status-dot"></span>
+                  草稿
+                  <span class="status-desc">不展示</span>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -237,6 +302,7 @@ onMounted(() => loadAgents())
 
 .stat-dot.total { background: #007aff; }
 .stat-dot.active { background: #34c759; }
+.stat-dot.inactive { background: #8e8e93; }
 .stat-dot.draft { background: #ff9500; }
 
 .btn-add {
@@ -372,9 +438,24 @@ onMounted(() => loadAgents())
   transition: all 0.2s;
 }
 
+.card-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.card-status svg {
+  opacity: 0.6;
+}
+
 .card-status.active {
   background: rgba(52, 199, 89, 0.12);
   color: #248a3d;
+}
+
+.card-status.inactive {
+  background: rgba(142, 142, 147, 0.15);
+  color: #636366;
 }
 
 .card-status.draft {
@@ -384,6 +465,58 @@ onMounted(() => loadAgents())
 
 .card-status:hover {
   transform: scale(1.05);
+}
+
+/* 状态包装器 */
+.status-wrapper {
+  position: relative;
+}
+
+/* 状态下拉菜单 */
+.status-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+  padding: 6px;
+  min-width: 180px;
+  z-index: 100;
+}
+
+.status-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #1d1d1f;
+  position: relative;
+  white-space: nowrap;
+}
+
+.status-option:hover {
+  background: #f5f5f7;
+}
+
+.status-option .status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-option.active .status-dot { background: #34c759; }
+.status-option.inactive .status-dot { background: #8e8e93; }
+.status-option.draft .status-dot { background: #ff9500; }
+
+.status-option .status-desc {
+  font-size: 11px;
+  color: #86868b;
+  margin-left: auto;
 }
 
 .card-body {

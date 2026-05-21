@@ -72,6 +72,27 @@ FILE_MANAGE_DIR = get_file_manage_dir()
 
 # ==================== 工具函数 ====================
 
+def _fix_year_in_path(file_path: str) -> str:
+    """
+    修正文件路径中的年份问题。
+
+    Claude模型的知识截止日期可能导致它把2026年"纠正"为2025年。
+    例如: upload_20250521_xxx.xlsx -> upload_20260521_xxx.xlsx
+    """
+    import re
+    # 匹配 upload_YYYYMMDD 格式，其中YYYY是2024或2025
+    pattern = r'(upload_)(202[45])(\d{4}_)'
+
+    def replace_year(match):
+        prefix = match.group(1)
+        year = match.group(2)
+        rest = match.group(3)
+        # 将2024/2025替换为2026
+        return f"{prefix}2026{rest}"
+
+    return re.sub(pattern, replace_year, file_path)
+
+
 def _resolve_file_path(file_path: str) -> str:
     """将 URL 路径或相对路径转换为完整的文件系统路径"""
     if not file_path:
@@ -111,6 +132,20 @@ def _resolve_file_path(file_path: str) -> str:
     file_manage_path = FILE_MANAGE_DIR / Path(file_path).name
     if file_manage_path.exists():
         return str(file_manage_path)
+
+    # 如果文件不存在，尝试修正年份（Claude可能把2026误写为2025/2024）
+    corrected_path = _fix_year_in_path(file_path)
+    if corrected_path != file_path:
+        corrected_p = Path(corrected_path)
+        if corrected_p.is_absolute() and corrected_p.exists():
+            print(f"[_resolve_file_path] 年份修正: {file_path} -> {corrected_path}")
+            return corrected_path
+
+        # 也尝试在 uploads 目录中查找修正后的文件名
+        corrected_uploads_path = UPLOADS_DIR / Path(corrected_path).name
+        if corrected_uploads_path.exists():
+            print(f"[_resolve_file_path] 年份修正(uploads): {file_path} -> {corrected_uploads_path}")
+            return str(corrected_uploads_path)
 
     return file_path
 

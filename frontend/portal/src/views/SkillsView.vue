@@ -61,6 +61,10 @@ const departmentName = computed(() => {
   return name ? name.replace(/ Agent$/, '') : ''
 })
 
+// Agent 不可用提示
+const agentUnavailable = ref(false)
+const agentUnavailableMessage = ref('')
+
 // 加载当前 Agent
 const loadCurrentAgent = async () => {
   const agentName = agentNameFromQuery.value
@@ -71,8 +75,17 @@ const loadCurrentAgent = async () => {
     currentAgent.value = await agentsApi.getByName(agentName)
     console.log('[loadCurrentAgent] 加载的 Agent:', currentAgent.value?.name)
     console.log('[loadCurrentAgent] Agent 配置的技能:', currentAgent.value?.skills)
-  } catch (error) {
+    agentUnavailable.value = false
+  } catch (error: any) {
     console.error('Failed to load agent:', error)
+    // 检查是否是 403 错误（Agent 未发布）
+    if (error?.response?.status === 403) {
+      agentUnavailable.value = true
+      agentUnavailableMessage.value = `「${agentName}」当前未上线，请选择其他 Agent 或联系管理员`
+    } else if (error?.response?.status === 404) {
+      agentUnavailable.value = true
+      agentUnavailableMessage.value = `「${agentName}」不存在，请选择其他 Agent`
+    }
   }
 }
 
@@ -1409,7 +1422,15 @@ onUnmounted(() => {
           </button>
         </div>
         <div v-show="activeTab === 'agent'" class="agent-area">
+          <!-- Agent 不可用提示 -->
+          <div v-if="agentUnavailable" class="agent-unavailable">
+            <div class="unavailable-icon">🚫</div>
+            <div class="unavailable-title">Agent 暂不可用</div>
+            <div class="unavailable-message">{{ agentUnavailableMessage }}</div>
+            <button class="unavailable-btn" @click="router.push('/')">返回首页</button>
+          </div>
           <AgentChat
+            v-else
             ref="agentChatRef"
             :skills="skills"
             :agent-id="currentAgentId"
@@ -2468,6 +2489,57 @@ onUnmounted(() => {
   display: flex;
   min-height: 0;
   overflow: hidden;
+}
+
+/* Agent 不可用提示 */
+.agent-unavailable {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 40px;
+  text-align: center;
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.05) 0%, rgba(249, 115, 22, 0.05) 100%);
+  border-radius: 16px;
+  margin: 20px;
+}
+
+.unavailable-icon {
+  font-size: 64px;
+  opacity: 0.8;
+}
+
+.unavailable-title {
+  font-size: 24px;
+  font-weight: 600;
+  color: #ef4444;
+}
+
+.unavailable-message {
+  font-size: 15px;
+  color: #64748b;
+  max-width: 400px;
+  line-height: 1.6;
+}
+
+.unavailable-btn {
+  margin-top: 8px;
+  padding: 10px 24px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #fff;
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.unavailable-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
 }
 
 /* Workflows 区域 */

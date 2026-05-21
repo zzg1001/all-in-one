@@ -1586,10 +1586,11 @@ export interface AgentListResponse {
 
 export const agentsApi = {
   // 获取 Agent 列表
-  getAll: (params?: { category?: string; status?: string; search?: string }) => {
+  getAll: (params?: { category?: string; status?: string; visible?: boolean; search?: string }) => {
     const searchParams = new URLSearchParams()
     if (params?.category) searchParams.append('category', params.category)
     if (params?.status) searchParams.append('status', params.status)
+    if (params?.visible) searchParams.append('visible', 'true')
     if (params?.search) searchParams.append('search', params.search)
     const query = searchParams.toString()
     return request<AgentListResponse>(`/agents${query ? `?${query}` : ''}`)
@@ -1627,9 +1628,15 @@ export const agentsApi = {
       method: 'POST',
     }),
 
-  // 弃用 Agent
+  // 下线 Agent（设为 draft，不展示）
   deprecate: (id: string) =>
     request<{ status: string; message: string }>(`/agents/${id}/deprecate`, {
+      method: 'POST',
+    }),
+
+  // 禁用 Agent（设为 inactive，展示但不可用）
+  disable: (id: string) =>
+    request<{ status: string; message: string }>(`/agents/${id}/disable`, {
       method: 'POST',
     }),
 

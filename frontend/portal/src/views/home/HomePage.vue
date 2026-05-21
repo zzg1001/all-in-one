@@ -22,30 +22,59 @@ const toggleLocale = () => {
 // 用户菜单
 const showUserMenu = ref(false)
 
-// 预设 Agent 配置（8个入口）
-const presetAgents = [
-  { name: 'HR部门 Agent', department: 'HR', theme: 'blue', desc: '人事数据分析 · 入离职流程自动化 · 招聘文案生成' },
-  { name: '销售部门 Agent', department: '销售', theme: 'purple', desc: '销售数据分析 · 客户管理自动化 · 销售物料生成' },
-  { name: '采购部门 Agent', department: '采购', theme: 'cyan', desc: '采购成本分析 · 采购流程自动化 · 供应商管理' },
-  { name: '行政部门 Agent', department: '行政', theme: 'orange', desc: '行政数据分析 · 会议室/车辆预约自动化 · 会议纪要生成' },
-  { name: '财务部门 Agent', department: '财务', theme: 'green', desc: '财务数据分析 · 费用报销审核 · 财务文书生成' },
-  { name: '智能体自定义', department: null, theme: 'magenta', desc: '自然语言指令训练 · 个性化流程自动化 · 适配专属需求' },
-  { name: '商业线索 Agent', department: null, theme: 'red', desc: '智能分级推送 · 全网智能抓取 · 全流程转化管理' },
-  { name: '老板视角', department: null, theme: 'indigo', desc: '现金流与财务健康 · 增长与战略方向 · 人才与团队' },
-]
+// 预设 Agent 配置（用于提供默认的 theme 和样式）
+const presetAgentConfig: Record<string, { department: string | null; theme: string }> = {
+  'HR部门 Agent': { department: 'HR', theme: 'blue' },
+  '销售部门 Agent': { department: '销售', theme: 'purple' },
+  '采购部门 Agent': { department: '采购', theme: 'cyan' },
+  '行政部门 Agent': { department: '行政', theme: 'orange' },
+  '财务部门 Agent': { department: '财务', theme: 'green' },
+  '智能体自定义': { department: null, theme: 'magenta' },
+  '商业线索 Agent': { department: null, theme: 'red' },
+  '老板视角': { department: null, theme: 'indigo' },
+}
 
-// 动态加载的 Agent
-const dynamicAgents = ref<Array<{ name: string; department: string | null; theme: string; desc: string }>>([])
-
-// 可用的颜色主题（用于动态 Agent）
+// 可用的颜色主题（用于非预设 Agent）
 const themeColors = ['teal', 'amber', 'rose', 'lime', 'sky', 'violet', 'emerald', 'pink']
 
-// 合并预设和动态 Agent
-const visibleAgents = computed(() => [...presetAgents, ...dynamicAgents.value])
+// Agent 类型定义
+interface VisibleAgent {
+  name: string
+  department: string | null
+  theme: string
+  desc: string
+  status: 'active' | 'inactive'  // active=可用, inactive=展示但不可用
+}
+
+// 所有可展示的 Agent（从后端加载，包括 active 和 inactive）
+const visibleAgents = ref<VisibleAgent[]>([])
+
+// 加载中状态
+const loadingAgents = ref(true)
+
+// Toast 提示
+const toastVisible = ref(false)
+const toastMessage = ref('')
+let toastTimer: ReturnType<typeof setTimeout> | null = null
+
+function showToast(message: string, duration = 2500) {
+  toastMessage.value = message
+  toastVisible.value = true
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => {
+    toastVisible.value = false
+  }, duration)
+}
 
 // 处理 Agent 点击
-function handleAgentClick(agentName: string, theme: string) {
-  const targetUrl = `/app?from=home&agent=${encodeURIComponent(agentName)}&theme=${theme}`
+function handleAgentClick(agent: VisibleAgent) {
+  // 检查 Agent 状态
+  if (agent.status === 'inactive') {
+    showToast(`「${agent.name}」当前不可用，敬请期待`)
+    return
+  }
+
+  const targetUrl = `/app?from=home&agent=${encodeURIComponent(agent.name)}&theme=${agent.theme}`
 
   // 未登录 -> 跳转登录页
   if (!authStore.isAuthenticated) {
@@ -54,8 +83,8 @@ function handleAgentClick(agentName: string, theme: string) {
   }
 
   // 已登录但无权限
-  if (!authStore.canAccessAgent(agentName)) {
-    alert(`您没有权限访问「${agentName}」，请联系管理员`)
+  if (!authStore.canAccessAgent(agent.name)) {
+    showToast(`您没有权限访问「${agent.name}」，请联系管理员`)
     return
   }
 
@@ -74,34 +103,50 @@ async function handleLogout() {
   showUserMenu.value = false
 }
 
-// 加载动态 Agent 列表
-async function loadDynamicAgents() {
+// 加载 Agent 列表（获取所有可展示的: active + inactive）
+async function loadAgents() {
+  loadingAgents.value = true
   try {
-    const res = await agentsApi.getAll({ status: 'active' })
+    const res = await agentsApi.getAll({ visible: true })
     if (res.agents) {
-      // 获取预设 Agent 名称列表
-      const presetNames = new Set(presetAgents.map(a => a.name))
-      // 过滤掉预设中已有的，只保留新发布的
-      const newAgents = res.agents
-        .filter(agent => !presetNames.has(agent.name))
-        .map((agent, index) => ({
-          name: agent.name,
-          department: null,
-          theme: themeColors[index % themeColors.length],
-          desc: agent.description || '自定义智能体'
-        }))
-      dynamicAgents.value = newAgents
+      let nonPresetIndex = 0
+      visibleAgents.value = res.agents.map(agent => {
+        // 检查是否是预设 Agent，使用预设的 theme
+        const preset = presetAgentConfig[agent.name]
+        if (preset) {
+          return {
+            name: agent.name,
+            department: preset.department,
+            theme: preset.theme,
+            desc: agent.description || '自定义智能体',
+            status: agent.status as 'active' | 'inactive'
+          }
+        } else {
+          // 非预设 Agent，使用动态颜色
+          const theme = themeColors[nonPresetIndex % themeColors.length]
+          nonPresetIndex++
+          return {
+            name: agent.name,
+            department: null,
+            theme,
+            desc: agent.description || '自定义智能体',
+            status: agent.status as 'active' | 'inactive'
+          }
+        }
+      })
     }
   } catch (err) {
-    console.error('加载动态 Agent 失败:', err)
+    console.error('加载 Agent 失败:', err)
+  } finally {
+    loadingAgents.value = false
   }
 }
 
 // 检查认证状态
 onMounted(async () => {
   await authStore.checkAuth()
-  // 加载动态 Agent
-  loadDynamicAgents()
+  // 加载 Agent 列表
+  loadAgents()
 })
 </script>
 
@@ -180,28 +225,54 @@ onMounted(async () => {
           <p class="section-desc">基于大模型和行业知识，构建面向OA场景的智能产品生态</p>
         </div>
         <div class="products-grid">
-          <!-- 部门 Agent 列表 -->
-          <div
-            v-for="agent in visibleAgents"
-            :key="agent.name"
-            class="product-card"
-            :class="`card-${agent.theme}`"
-            @click="handleAgentClick(agent.name, agent.theme)"
-          >
-            <div class="card-icon">
-              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
-              </svg>
-            </div>
-            <h3>{{ agent.name }}</h3>
-            <p>{{ agent.desc }}</p>
-            <span class="card-link">了解更多 →</span>
+          <!-- 加载中状态 -->
+          <div v-if="loadingAgents" class="loading-placeholder">
+            <div class="loading-spinner"></div>
+            <span>加载中...</span>
           </div>
 
+          <!-- 空状态 -->
+          <div v-else-if="visibleAgents.length === 0" class="empty-state">
+            <span>暂无可用的 Agent</span>
+          </div>
 
+          <!-- 部门 Agent 列表 -->
+          <template v-else>
+            <div
+              v-for="agent in visibleAgents"
+              :key="agent.name"
+              class="product-card"
+              :class="[`card-${agent.theme}`, { 'card-inactive': agent.status === 'inactive' }]"
+              @click="handleAgentClick(agent)"
+            >
+              <!-- 不可用标签 -->
+              <span v-if="agent.status === 'inactive'" class="card-badge-inactive">暂不可用</span>
+              <div class="card-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
+                </svg>
+              </div>
+              <h3>{{ agent.name }}</h3>
+              <p>{{ agent.desc }}</p>
+              <span class="card-link">{{ agent.status === 'inactive' ? '敬请期待' : '了解更多 →' }}</span>
+            </div>
+          </template>
         </div>
       </div>
     </section>
+
+    <!-- Toast 提示 -->
+    <Transition name="toast">
+      <div v-if="toastVisible" class="toast-container">
+        <div class="toast-content">
+          <svg class="toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M12 8v4M12 16h.01"/>
+          </svg>
+          <span>{{ toastMessage }}</span>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -544,6 +615,33 @@ html, body {
   width: 100%;
 }
 
+/* Loading and Empty States */
+.loading-placeholder,
+.empty-state {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 60px 20px;
+  color: #64748b;
+  font-size: 15px;
+}
+
+.loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid #e2e8f0;
+  border-top-color: #6366f1;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 /* Product Card */
 .product-card {
   position: relative;
@@ -561,6 +659,31 @@ html, body {
   transform: translateY(-4px);
   box-shadow: 0 12px 24px rgba(0, 0, 0, 0.1);
   border-color: #e5e7eb;
+}
+
+/* Inactive Card - 展示但不可用 */
+.product-card.card-inactive {
+  cursor: not-allowed;
+  opacity: 0.6;
+  filter: grayscale(30%);
+}
+
+.product-card.card-inactive:hover {
+  transform: none;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.card-badge-inactive {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, #94a3b8 0%, #64748b 100%);
+  border-radius: 12px;
+  z-index: 1;
 }
 
 /* Card Colors - Icon with multi-color gradients */
@@ -759,5 +882,51 @@ html, body {
   .product-card {
     padding: 14px;
   }
+}
+
+/* Toast 提示 */
+.toast-container {
+  position: fixed;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+}
+
+.toast-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 24px;
+  background: rgba(30, 30, 30, 0.92);
+  backdrop-filter: blur(12px);
+  border-radius: 12px;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+.toast-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  color: #fbbf24;
+}
+
+/* Toast 动画 */
+.toast-enter-active,
+.toast-leave-active {
+  transition: all 0.3s ease;
+}
+
+.toast-enter-from {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-20px);
+}
+
+.toast-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-10px);
 }
 </style>

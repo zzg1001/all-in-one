@@ -283,13 +283,21 @@ def _init_sample_agents(db: Session):
 @router.get("", response_model=AgentListResponse)
 async def list_agents(
     category: Optional[str] = Query(None, description="按分类筛选"),
-    status: Optional[str] = Query(None, description="按状态筛选"),
+    status: Optional[str] = Query(None, description="按状态筛选: active, inactive, draft"),
+    visible: bool = Query(False, description="获取所有可展示的 Agent (active + inactive)"),
     search: Optional[str] = Query(None, description="搜索关键词"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
-    """获取 Agent 列表"""
+    """
+    获取 Agent 列表
+
+    状态说明:
+    - active: 上线，展示且可用
+    - inactive: 不可用，展示但不能使用
+    - draft: 未发布，不展示
+    """
     # 初始化示例数据
     _init_sample_agents(db)
 
@@ -298,7 +306,10 @@ async def list_agents(
     # 筛选
     if category:
         query = query.filter(AgentModel.category == category)
-    if status:
+    if visible:
+        # 获取所有可展示的 Agent (active + inactive)
+        query = query.filter(AgentModel.status.in_(["active", "inactive"]))
+    elif status:
         query = query.filter(AgentModel.status == status)
     if search:
         search_pattern = f"%{search}%"
@@ -315,14 +326,39 @@ async def list_agents(
 
 
 @router.get("/by-name/{name}", response_model=Agent)
-async def get_agent_by_name(name: str, db: Session = Depends(get_db)):
-    """根据名称获取 Agent"""
+async def get_agent_by_name(
+    name: str,
+    allow_inactive: bool = Query(False, description="是否允许访问非 active 状态的 Agent"),
+    db: Session = Depends(get_db)
+):
+    """
+    根据名称获取 Agent
+
+    状态说明:
+    - active: 可正常使用
+    - inactive: 展示但不可用，返回 403
+    - draft: 未发布，返回 403
+    """
     # 初始化示例数据
     _init_sample_agents(db)
 
     agent_db = db.query(AgentModel).filter(AgentModel.name == name).first()
     if not agent_db:
         raise HTTPException(status_code=404, detail=f"Agent '{name}' 不存在")
+
+    # 检查状态
+    if agent_db.status != "active" and not allow_inactive:
+        if agent_db.status == "inactive":
+            raise HTTPException(
+                status_code=403,
+                detail=f"Agent '{name}' 当前不可用"
+            )
+        else:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Agent '{name}' 当前未发布，无法使用"
+            )
+
     return _db_to_response(agent_db)
 
 
@@ -428,15 +464,28 @@ async def publish_agent(agent_id: str, db: Session = Depends(get_db)):
 
 @router.post("/{agent_id}/deprecate")
 async def deprecate_agent(agent_id: str, db: Session = Depends(get_db)):
-    """弃用 Agent"""
+    """弃用 Agent（设为 draft，不展示）"""
     agent_db = db.query(AgentModel).filter(AgentModel.id == agent_id).first()
     if not agent_db:
         raise HTTPException(status_code=404, detail="Agent 不存在")
 
-    agent_db.status = "deprecated"
+    agent_db.status = "draft"
     db.commit()
 
-    return {"status": "success", "message": "Agent 已弃用"}
+    return {"status": "success", "message": "Agent 已下线"}
+
+
+@router.post("/{agent_id}/disable")
+async def disable_agent(agent_id: str, db: Session = Depends(get_db)):
+    """禁用 Agent（设为 inactive，展示但不可用）"""
+    agent_db = db.query(AgentModel).filter(AgentModel.id == agent_id).first()
+    if not agent_db:
+        raise HTTPException(status_code=404, detail="Agent 不存在")
+
+    agent_db.status = "inactive"
+    db.commit()
+
+    return {"status": "success", "message": "Agent 已设为不可用"}
 
 
 # ============ AI 生成相关 ============
