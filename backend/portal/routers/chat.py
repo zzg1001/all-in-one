@@ -29,7 +29,7 @@ async def get_effective_user_id(
 ) -> str:
     """
     获取有效的用户ID
-    优先使用登录用户ID，否则使用 header 中的用户ID（兼容旧版）
+    优先使用登录用户ID（历史记录跟着用户走）
     """
     if current_user:
         return current_user.id
@@ -161,14 +161,20 @@ async def update_session(
 @router.delete("/{session_id}")
 async def delete_session(
     session_id: str,
+    data_scope: Optional[DataScope] = Depends(get_data_scope_optional),
     user_id: str = Depends(get_effective_user_id),
     db: Session = Depends(get_db)
 ):
     """删除会话及其所有消息"""
-    session = db.query(ChatSession).filter(
-        ChatSession.id == session_id,
-        ChatSession.user_id == user_id
-    ).first()
+    query = db.query(ChatSession).filter(ChatSession.id == session_id)
+
+    # 应用数据权限过滤（与列表查询一致）
+    if data_scope:
+        query = data_scope.apply_filter(query, ChatSession.user_id)
+    else:
+        query = query.filter(ChatSession.user_id == user_id)
+
+    session = query.first()
 
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")

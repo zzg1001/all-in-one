@@ -40,8 +40,8 @@ const route = useRoute()
 const router = useRouter()
 const activeTab = ref<'skills' | 'agent' | 'workflows' | 'agents' | 'monitor'>('agent')
 
-// 从首页跳转时隐藏侧边栏
-const hideSidebar = computed(() => route.query.from === 'home')
+// 始终显示侧边栏
+const hideSidebar = computed(() => false)
 
 // 从 URL 获取当前 Agent ID
 const currentAgentId = computed(() => currentAgent.value?.id || route.query.agentId as string | undefined)
@@ -1295,10 +1295,6 @@ onUnmounted(() => {
           <button class="nav-btn" :class="{ active: activeTab === 'agent' }" @click="activeTab = 'agent'">
             <span class="nav-icon">💬</span>
             <span class="nav-label">对话</span>
-          </button>
-          <button class="nav-btn" :class="{ active: activeTab === 'skills' }" @click="activeTab = 'skills'">
-            <span class="nav-icon">⚡</span>
-            <span class="nav-label">技能</span>
           </button>
           <button class="nav-btn" :class="{ active: activeTab === 'workflows' }" @click="activeTab = 'workflows'">
             <span class="nav-icon">🔄</span>

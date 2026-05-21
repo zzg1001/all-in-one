@@ -150,6 +150,16 @@ async def get_proxy_config_by_id(config_id: str, db: Session = Depends(get_db)):
 @router.post("/configs")
 async def create_proxy_config(data: ProxyConfigCreate, db: Session = Depends(get_db)):
     """创建代理配置"""
+    # 检查端口是否已被占用
+    existing = db.query(ProxyConfig).filter(ProxyConfig.proxy_port == data.proxy_port).first()
+    if existing:
+        raise HTTPException(status_code=400, detail=f"端口 {data.proxy_port} 已被配置 '{existing.name}' 占用")
+
+    # 检查名称是否重复
+    existing_name = db.query(ProxyConfig).filter(ProxyConfig.name == data.name).first()
+    if existing_name:
+        raise HTTPException(status_code=400, detail=f"配置名称 '{data.name}' 已存在")
+
     config = ProxyConfig(
         id=str(uuid.uuid4()),
         name=data.name,
@@ -158,7 +168,7 @@ async def create_proxy_config(data: ProxyConfigCreate, db: Session = Depends(get
         target_base_url=data.target_base_url,
         target_api_key=data.target_api_key,
         target_model=data.target_model,
-        proxy_url=data.proxy_url or "http://localhost:8001/proxy/v1/messages",  # 默认代理地址
+        proxy_url=data.proxy_url or f"http://localhost:{data.proxy_port}",  # 默认代理地址
         proxy_model=data.proxy_model or "claude-sonnet-4-20250514",  # 默认对外模型名
         proxy_port=data.proxy_port,
         max_tokens=data.max_tokens,
@@ -182,6 +192,24 @@ async def update_proxy_config_by_id(
     config = db.query(ProxyConfig).filter(ProxyConfig.id == config_id).first()
     if not config:
         raise HTTPException(status_code=404, detail="配置不存在")
+
+    # 检查端口是否与其他配置冲突
+    if data.proxy_port is not None and data.proxy_port != config.proxy_port:
+        existing = db.query(ProxyConfig).filter(
+            ProxyConfig.proxy_port == data.proxy_port,
+            ProxyConfig.id != config_id
+        ).first()
+        if existing:
+            raise HTTPException(status_code=400, detail=f"端口 {data.proxy_port} 已被配置 '{existing.name}' 占用")
+
+    # 检查名称是否与其他配置冲突
+    if data.name is not None and data.name != config.name:
+        existing = db.query(ProxyConfig).filter(
+            ProxyConfig.name == data.name,
+            ProxyConfig.id != config_id
+        ).first()
+        if existing:
+            raise HTTPException(status_code=400, detail=f"配置名称 '{data.name}' 已存在")
 
     for field, value in data.dict(exclude_unset=True).items():
         if value is not None:

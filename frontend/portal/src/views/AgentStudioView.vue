@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { agentsApi, skillsApi, type Skill } from '@/api'
-import SkillCard from '@/components/skills/SkillCard.vue'
-import AddSkillModal from '@/components/skills/AddSkillModal.vue'
+import { agentsApi } from '@/api'
 
 const router = useRouter()
 const route = useRoute()
@@ -27,15 +25,6 @@ const agent = reactive({
 const isLoading = ref(false)
 const loadError = ref('')
 
-// 从 API 加载的技能列表
-const availableSkillsFromApi = ref<Skill[]>([])
-const skillsLoading = ref(false)
-
-// 技能管理相关状态
-const showSkillModal = ref(false)
-const skillModalMode = ref<'create' | 'upload'>('create')
-const editingSkill = ref<Skill | null>(null)  // 编辑时传入的技能
-
 // Toast 提示
 const showToast = ref(false)
 const toastMessage = ref('')
@@ -45,82 +34,6 @@ const showToastMessage = (message: string) => {
   setTimeout(() => {
     showToast.value = false
   }, 3000)
-}
-
-// 加载技能列表
-const loadSkills = async () => {
-  skillsLoading.value = true
-  try {
-    const skills = await skillsApi.getAll()
-    availableSkillsFromApi.value = skills
-  } catch (error) {
-    console.error('Failed to load skills:', error)
-  } finally {
-    skillsLoading.value = false
-  }
-}
-
-// 打开创建技能弹窗
-const openCreateModal = () => {
-  editingSkill.value = null
-  skillModalMode.value = 'create'
-  showSkillModal.value = true
-}
-
-// 打开上传技能弹窗
-const openUploadModal = () => {
-  editingSkill.value = null
-  skillModalMode.value = 'upload'
-  showSkillModal.value = true
-}
-
-// 打开编辑技能弹窗
-const openEditModal = (skill: Skill) => {
-  editingSkill.value = skill
-  skillModalMode.value = 'create'  // 编辑也用create模式（AI对话模式）
-  showSkillModal.value = true
-}
-
-// 关闭技能弹窗
-const closeSkillModal = () => {
-  showSkillModal.value = false
-  editingSkill.value = null
-}
-
-// 技能创建/编辑成功
-const handleSkillSubmit = (data: any) => {
-  const isEdit = !!editingSkill.value
-  showSkillModal.value = false
-  editingSkill.value = null
-  loadSkills()
-  showToastMessage(isEdit ? '技能修改成功' : '技能创建成功')
-}
-
-// 删除技能
-const deleteSkill = async (index: number) => {
-  const skill = availableSkillsFromApi.value[index]
-  if (!skill) return
-
-  if (!confirm(`确定要删除技能 "${skill.name}" 吗？`)) return
-
-  try {
-    await skillsApi.delete(skill.id)
-    availableSkillsFromApi.value.splice(index, 1)
-    showToastMessage('技能已删除')
-  } catch (error: any) {
-    console.error('Failed to delete skill:', error)
-    showToastMessage('删除失败: ' + (error.message || '未知错误'))
-  }
-}
-
-// 编辑技能（使用AddSkillModal）
-const editSkill = (skill: Skill) => {
-  // 上传的技能不可编辑
-  if (skill.author === 'uploaded') {
-    showToastMessage('上传的技能不可编辑')
-    return
-  }
-  openEditModal(skill)
 }
 
 const icons = ['🤖', '🧠', '💡', '🎯', '🚀', '⚡', '🔧', '📊', '📝', '💻', '🌐', '🔍', '✨', '🎨', '📚']
@@ -135,35 +48,7 @@ const models = [
 
 const isGenerating = ref(false)
 const generatingField = ref('')
-const activeTab = ref<'basic' | 'prompt' | 'tools' | 'advanced'>('basic')
-
-const toggleSkill = async (skillId: string) => {
-  const index = agent.skills.indexOf(skillId)
-  const isAdding = index === -1
-
-  if (isAdding) {
-    agent.skills.push(skillId)
-  } else {
-    agent.skills.splice(index, 1)
-  }
-
-  // 自动保存技能配置
-  if (agent.id) {
-    try {
-      await agentsApi.update(agent.id, { skills: agent.skills })
-      const skillName = availableSkillsFromApi.value.find(s => s.id === skillId)?.name || '技能'
-      showToastMessage(isAdding ? `已添加「${skillName}」` : `已移除「${skillName}」`)
-    } catch (error: any) {
-      // 回滚
-      if (isAdding) {
-        agent.skills.splice(agent.skills.indexOf(skillId), 1)
-      } else {
-        agent.skills.push(skillId)
-      }
-      showToastMessage('保存失败: ' + (error.message || '未知错误'))
-    }
-  }
-}
+const activeTab = ref<'basic' | 'prompt' | 'advanced'>('basic')
 
 const generatePrompt = async () => {
   if (!agent.name || !agent.description) {
@@ -284,9 +169,6 @@ const loadAgent = async (id: string) => {
 }
 
 onMounted(() => {
-  // 加载技能列表
-  loadSkills()
-
   // 如果有 ID，加载 Agent 数据
   const agentId = route.query.id as string
   if (agentId) {
@@ -345,10 +227,6 @@ onMounted(() => {
         </div>
         <div class="intro-item">
           <span class="intro-number">3</span>
-          <span>技能管理: 创建、编辑、删除可用技能</span>
-        </div>
-        <div class="intro-item">
-          <span class="intro-number">4</span>
           <span>高级设置: 调整模型参数和行为配置</span>
         </div>
       </div>
@@ -376,16 +254,8 @@ onMounted(() => {
             </div>
             <span v-if="agent.systemPrompt" class="nav-check">✓</span>
           </button>
-          <button :class="['nav-item', { active: activeTab === 'tools' }]" @click="activeTab = 'tools'">
-            <span class="nav-number">3</span>
-            <div class="nav-text">
-              <span class="nav-title">技能管理</span>
-              <span class="nav-desc">管理可用技能</span>
-            </div>
-            <span v-if="agent.skills.length > 0" class="nav-check">✓</span>
-          </button>
           <button :class="['nav-item', { active: activeTab === 'advanced' }]" @click="activeTab = 'advanced'">
-            <span class="nav-number">4</span>
+            <span class="nav-number">3</span>
             <div class="nav-text">
               <span class="nav-title">高级设置</span>
               <span class="nav-desc">模型和参数</span>
@@ -503,67 +373,6 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- 技能管理 -->
-        <div v-show="activeTab === 'tools'" class="form-panel form-panel-wide">
-          <div class="panel-header">
-            <div class="panel-header-left">
-              <h2>技能管理</h2>
-              <p>管理 Agent 可使用的技能，支持创建、编辑和删除</p>
-            </div>
-            <div class="panel-header-right">
-              <button class="btn-create-skill" @click="openCreateModal">
-                <svg viewBox="0 0 20 20" fill="currentColor">
-                  <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd"/>
-                </svg>
-                创建技能
-              </button>
-              <button class="btn-upload-skill" @click="openUploadModal">
-                <svg viewBox="0 0 20 20" fill="currentColor">
-                  <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clip-rule="evenodd"/>
-                </svg>
-                上传技能
-              </button>
-            </div>
-          </div>
-
-          <!-- 技能网格 -->
-          <div class="skills-grid-wrapper">
-            <div v-if="skillsLoading" class="skills-loading">
-              <div class="loading-spinner-small"></div>
-              <span>加载技能中...</span>
-            </div>
-            <div v-else-if="availableSkillsFromApi.length === 0" class="empty-skills-large">
-              <div class="empty-icon">⚡</div>
-              <h3>暂无技能</h3>
-              <p>创建或上传你的第一个技能</p>
-              <div class="empty-actions">
-                <button class="btn-create-skill" @click="openCreateModal">创建技能</button>
-                <button class="btn-upload-skill" @click="openUploadModal">上传技能</button>
-              </div>
-            </div>
-            <div v-else class="skills-grid">
-              <div
-              v-for="(skill, index) in availableSkillsFromApi"
-              :key="skill.id"
-              :class="['skill-grid-item', { selected: agent.skills.includes(skill.id) }]"
-              @click="toggleSkill(skill.id)"
-            >
-                <SkillCard
-                  :skill="skill"
-                  @delete="deleteSkill(index)"
-                  @edit="editSkill(skill)"
-                />
-              </div>
-            </div>
-          </div>
-
-          <!-- 已选技能提示 -->
-          <div v-if="agent.skills.length > 0" class="selected-skills-hint">
-            <span class="hint-icon">✓</span>
-            <span>已选择 {{ agent.skills.length }} 个技能</span>
-          </div>
-        </div>
-
         <!-- 高级设置 -->
         <div v-show="activeTab === 'advanced'" class="form-panel">
           <div class="panel-header">
@@ -660,15 +469,6 @@ onMounted(() => {
         <button @click="goBack">返回</button>
       </div>
     </div>
-
-    <!-- 技能创建/编辑/上传弹窗 -->
-    <AddSkillModal
-      :show="showSkillModal"
-      :mode="skillModalMode"
-      :edit-skill="editingSkill"
-      @close="closeSkillModal"
-      @submit="handleSkillSubmit"
-    />
 
     <!-- Toast 提示 -->
     <Transition name="toast">
@@ -1301,170 +1101,6 @@ onMounted(() => {
   font-size: 12px;
   color: #9ca3af;
   margin: 0;
-}
-
-.panel-header-right {
-  display: flex;
-  gap: 8px;
-}
-
-.btn-create-skill, .btn-upload-skill {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.btn-create-skill {
-  background: linear-gradient(135deg, #1677ff 0%, #4096ff 100%);
-  border: none;
-  color: white;
-}
-
-.btn-create-skill:hover {
-  box-shadow: 0 2px 8px rgba(22, 119, 255, 0.3);
-}
-
-.btn-upload-skill {
-  background: #fff;
-  border: 1px solid #e5e7eb;
-  color: #6b7280;
-}
-
-.btn-upload-skill:hover {
-  background: #f3f4f6;
-  color: #1f2937;
-}
-
-.btn-create-skill svg, .btn-upload-skill svg {
-  width: 14px;
-  height: 14px;
-}
-
-/* 技能网格容器 */
-.skills-grid-wrapper {
-  min-height: 300px;
-}
-
-.skills-loading {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 60px 20px;
-  color: #9ca3af;
-  font-size: 13px;
-}
-
-.loading-spinner-small {
-  width: 24px;
-  height: 24px;
-  border: 2px solid rgba(22, 119, 255, 0.2);
-  border-top-color: #1677ff;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-.empty-skills-large {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 60px 20px;
-  text-align: center;
-}
-
-.empty-icon {
-  font-size: 48px;
-  margin-bottom: 16px;
-}
-
-.empty-skills-large h3 {
-  font-size: 16px;
-  font-weight: 600;
-  color: #1f2937;
-  margin: 0 0 8px;
-}
-
-.empty-skills-large p {
-  font-size: 13px;
-  color: #9ca3af;
-  margin: 0 0 20px;
-}
-
-.empty-actions {
-  display: flex;
-  gap: 12px;
-}
-
-/* 技能网格 */
-.skills-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 16px;
-}
-
-.skill-grid-item {
-  position: relative;
-}
-
-/* 技能卡片 */
-.skill-grid-item {
-  position: relative;
-  cursor: pointer;
-  border-radius: 10px;
-  transition: all 0.2s;
-}
-
-.skill-grid-item:hover {
-  transform: translateY(-2px);
-}
-
-/* 选中状态 - 绿色边框和蒙层 */
-.skill-grid-item.selected {
-  box-shadow: 0 0 0 2px #22c55e;
-}
-
-.skill-grid-item.selected::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: rgba(34, 197, 94, 0.08);
-  border-radius: 10px;
-  pointer-events: none;
-  z-index: 1;
-}
-
-/* 已选技能提示 */
-.selected-skills-hint {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 16px;
-  padding: 10px 14px;
-  background: #f0fdf4;
-  border: 1px solid #bbf7d0;
-  border-radius: 8px;
-  font-size: 12px;
-  color: #15803d;
-}
-
-.hint-icon {
-  width: 18px;
-  height: 18px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #22c55e;
-  border-radius: 50%;
-  color: white;
-  font-size: 10px;
 }
 
 /* Toast 提示 */

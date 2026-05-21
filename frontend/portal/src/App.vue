@@ -3,7 +3,6 @@ import { ref, computed, watch } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 import LogPanel from '@/components/common/LogPanel.vue'
 import DataNotesTab from '@/components/common/DataNotesTab.vue'
-import GlobalNav from '@/components/common/GlobalNav.vue'
 import { agentsApi } from '@/api'
 
 const route = useRoute()
@@ -53,7 +52,6 @@ watch(() => route.query.agent, async (agentName) => {
 </script>
 
 <template>
-  <GlobalNav v-if="!isHomePage" />
   <RouterView />
   <LogPanel v-if="!isHomePage" v-model:show="showLogPanel" />
   <DataNotesTab v-if="!isHomePage" :department-name="departmentName" :agent-id="currentAgentId" />
