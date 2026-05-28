@@ -1087,13 +1087,21 @@ class AgentSDKService:
                             except Exception as e:
                                 print(f"[AgentSDKService] 上传失败: {e}")
                         else:
-                            for ext in ['.pdf', '.xlsx', '.csv', '.json', '.png', '.html', '.docx', '.pptx']:
+                            # Fallback: 在 OUTPUTS_DIR 查找最近生成的文件
+                            print(f"[AgentSDKService] 原路径不存在: {original_path}, 尝试在 OUTPUTS_DIR 查找")
+                            found_file = None
+                            for ext in ['.html', '.pdf', '.xlsx', '.csv', '.json', '.png', '.docx', '.pptx']:
                                 for f in OUTPUTS_DIR.glob(f"*{ext}"):
                                     if time.time() - f.stat().st_mtime < 60:
-                                        output_file_info = _create_output_file_info(f)
+                                        found_file = f
                                         break
-                                if output_file_info:
+                                if found_file:
                                     break
+                            if found_file:
+                                output_file_info = _create_output_file_info(found_file)
+                                print(f"[AgentSDKService] 找到文件: {found_file}")
+                            else:
+                                print(f"[AgentSDKService] 未在 OUTPUTS_DIR 找到最近生成的文件")
 
                     # 使用技能返回的 output 字段，而不是整个 stdout
                     clean_output = output_data.get("output") or output_data.get("message") or "执行完成"
