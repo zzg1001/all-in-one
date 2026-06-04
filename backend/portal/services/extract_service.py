@@ -20,8 +20,8 @@ from .ocr_service import OCRService
 
 logger = logging.getLogger(__name__)
 
-# Skill ID（固定，便于跟踪）
-SKILL_ID = "9edfed14-7f65-4997-93b4-c8c248fea984"
+# Skill 名称（按名称查找，不依赖固定 ID）
+SKILL_NAME = "企业信息提取"
 
 # OCR 服务实例
 _ocr_service = OCRService()
@@ -197,9 +197,33 @@ class ExtractService:
                 "word_base64": "..."  # Word 文档的 base64 编码
             }
         """
-        # 获取 skill 路径
+        # 按名称查找 skill
         from app.core.config import get_skills_storage_dir
-        skill_folder = get_skills_storage_dir() / SKILL_ID
+        from app.core.database import SessionLocal
+        from portal.models.skill import Skill
+
+        db = SessionLocal()
+        try:
+            skill_record = db.query(Skill).filter(
+                Skill.name == SKILL_NAME,
+                Skill.status == "active",
+                Skill.deleted_at.is_(None)
+            ).first()
+        finally:
+            db.close()
+
+        if not skill_record or not skill_record.folder_path:
+            logger.error(f"Skill '{SKILL_NAME}' 未找到")
+            return {
+                "data": self._get_default_data(company_name, credit_code, website),
+                "word_base64": "",
+                "raw_ocr_text": "",
+                "raw_intro_text": "",
+                "error": f"Skill '{SKILL_NAME}' 未找到，请先上传该技能"
+            }
+
+        skill_folder = get_skills_storage_dir() / skill_record.folder_path
+        print(f"[ExtractService] 找到 Skill: {skill_record.name}, ID: {skill_record.id}")
 
         if not skill_folder.exists():
             logger.error(f"Skill 文件夹不存在: {skill_folder}")
