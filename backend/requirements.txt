@@ -35,6 +35,7 @@ Pillow>=10.0.0
 pdfplumber>=0.10.0
 PyPDF2>=3.0.0
 PyMuPDF>=1.24.0  # PDF 转图片，支持扫描件 OCR
+opencv-python-headless>=4.8.0  # 图像处理，headless 版本适合服务器环境
 # paddleocr>=2.7.0  # 可选：GPU 加速 OCR，需要单独安装 paddlepaddle
 # pytesseract>=0.3.10  # 可选：需要安装 Tesseract OCR 引擎
 
