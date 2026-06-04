@@ -142,11 +142,233 @@ async function loadAgents() {
   }
 }
 
+// ========== 企业信息提取相关 ==========
+const licenseInputRef = ref<HTMLInputElement | null>(null)
+const introInputRef = ref<HTMLInputElement | null>(null)
+
+const extractStep = ref<'form' | 'loading' | 'result'>('form')
+const extractLoading = ref(false)
+const extractError = ref('')
+const extractProgress = ref('准备中...')
+const extractProgressPercent = ref(0)
+
+const extractForm = ref({
+  companyName: '',
+  creditCode: '',
+  website: '',
+  licenseFile: null as File | null,
+  introFile: null as File | null
+})
+
+const extractResultData = ref<any>(null)
+const extractWordBase64 = ref('')
+const extractRawOcrText = ref('')
+
+// 基础信息字段映射（兼容多种字段名）
+const extractResultBasic = computed(() => {
+  if (!extractResultData.value) return {}
+  const data = extractResultData.value
+  return {
+    '企业名称': data.企业名称 || '',
+    '统一社会信用代码': data.统一社会信用码 || data.统一社会信用代码 || '',
+    '法定代表人': data.法定代表人 || '',
+    '注册资本': data.注册资本 || '',
+    '成立时间': data.成立时间 || data.成立日期 || '',
+    '注册时间': data.注册时间 || data.核准日期 || '',
+    '注册地址': data.注册地址 || data.住所 || '',
+    '企业性质': data.企业性质 || data.企业类型 || '',
+    '经营范围': data.经营范围 || '',
+    '官网': data.官网 || '',
+    '简介': data.简介 || ''
+  }
+})
+
+// 是否可以提交
+const canSubmitExtract = computed(() => {
+  return extractForm.value.companyName.trim() ||
+         extractForm.value.creditCode.trim() ||
+         extractForm.value.licenseFile
+})
+
+// 触发文件选择
+function triggerExtractFileInput(type: 'license' | 'intro') {
+  if (type === 'license') {
+    licenseInputRef.value?.click()
+  } else {
+    introInputRef.value?.click()
+  }
+}
+
+// 处理文件拖放
+function handleExtractFileDrop(e: DragEvent, type: 'license' | 'intro') {
+  const files = e.dataTransfer?.files
+  if (files && files.length > 0) {
+    setExtractFile(files[0], type)
+  }
+}
+
+// 处理文件选择
+function handleExtractFileSelect(e: Event, type: 'license' | 'intro') {
+  const input = e.target as HTMLInputElement
+  if (input.files && input.files.length > 0) {
+    setExtractFile(input.files[0], type)
+  }
+}
+
+// 设置文件
+function setExtractFile(file: File, type: 'license' | 'intro') {
+  if (file.size > 20 * 1024 * 1024) {
+    showToast('文件大小不能超过 20MB')
+    return
+  }
+  if (type === 'license') {
+    extractForm.value.licenseFile = file
+  } else {
+    extractForm.value.introFile = file
+  }
+}
+
+// 重置表单
+function resetExtractForm() {
+  extractForm.value = {
+    companyName: '',
+    creditCode: '',
+    website: '',
+    licenseFile: null,
+    introFile: null
+  }
+  extractStep.value = 'form'
+  extractError.value = ''
+  extractResultData.value = null
+  extractWordBase64.value = ''
+}
+
+// 提交提取
+async function submitExtract() {
+  if (!canSubmitExtract.value || extractLoading.value) return
+
+  extractLoading.value = true
+  extractError.value = ''
+  extractStep.value = 'loading'
+  extractProgress.value = '正在上传文件...'
+  extractProgressPercent.value = 10
+
+  try {
+    const formData = new FormData()
+    if (extractForm.value.companyName) formData.append('company_name', extractForm.value.companyName)
+    if (extractForm.value.creditCode) formData.append('credit_code', extractForm.value.creditCode)
+    if (extractForm.value.website) formData.append('website', extractForm.value.website)
+    if (extractForm.value.licenseFile) formData.append('license_file', extractForm.value.licenseFile)
+    if (extractForm.value.introFile) formData.append('intro_file', extractForm.value.introFile)
+
+    extractProgress.value = '正在识别文件内容...'
+    extractProgressPercent.value = 30
+
+    const response = await fetch('/api/extract/company', {
+      method: 'POST',
+      body: formData
+    })
+
+    extractProgress.value = '正在提取企业信息...'
+    extractProgressPercent.value = 60
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}))
+      throw new Error(errData.detail || '提取失败，请稍后重试')
+    }
+
+    extractProgress.value = '正在生成企业档案...'
+    extractProgressPercent.value = 90
+
+    const data = await response.json()
+
+    if (data.success) {
+      extractResultData.value = data.data
+      extractWordBase64.value = data.word_file_base64 || ''
+      extractRawOcrText.value = data.raw_ocr_text || ''
+      extractStep.value = 'result'
+    } else {
+      throw new Error(data.error || '提取失败')
+    }
+  } catch (err: any) {
+    extractError.value = err.message || '提取失败，请稍后重试'
+    extractStep.value = 'form'
+  } finally {
+    extractLoading.value = false
+  }
+}
+
+// 下载 Word 文档
+function downloadWord() {
+  if (!extractWordBase64.value) {
+    showToast('Word 文件生成中，请稍后重试')
+    return
+  }
+
+  const byteCharacters = atob(extractWordBase64.value)
+  const byteNumbers = new Array(byteCharacters.length)
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i)
+  }
+  const byteArray = new Uint8Array(byteNumbers)
+  const blob = new Blob([byteArray], {
+    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  })
+
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = (extractResultData.value?.企业名称 || '企业') + '_企业档案.docx'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+// 下载 JSON
+function downloadJSON() {
+  if (!extractResultData.value) return
+
+  const jsonStr = JSON.stringify(extractResultData.value, null, 2)
+  const blob = new Blob([jsonStr], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = (extractResultData.value?.企业名称 || '企业') + '_data.json'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+// 产品下拉菜单
+const showProductMenu = ref(false)
+const toggleProductMenu = () => {
+  showProductMenu.value = !showProductMenu.value
+}
+
+// 滚动到指定区域
+function scrollToSection(sectionId: string) {
+  showProductMenu.value = false
+  const el = document.getElementById(sectionId)
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth' })
+  }
+}
+
 // 检查认证状态
 onMounted(async () => {
   await authStore.checkAuth()
   // 加载 Agent 列表
   loadAgents()
+
+  // 点击外部关闭产品菜单
+  document.addEventListener('click', (e: MouseEvent) => {
+    const target = e.target as HTMLElement
+    if (!target.closest('.nav-dropdown')) {
+      showProductMenu.value = false
+    }
+  })
 })
 </script>
 
@@ -163,7 +385,30 @@ onMounted(async () => {
 
           <nav class="nav">
             <ul class="nav-links">
-              <li><a href="#products" class="active">{{ $t('header.products') }}</a></li>
+              <li class="nav-dropdown">
+                <a href="#" class="dropdown-trigger" :class="{ active: showProductMenu }" @click.prevent="toggleProductMenu">
+                  {{ $t('header.products') }}
+                  <svg class="dropdown-arrow" :class="{ rotated: showProductMenu }" width="12" height="12" viewBox="0 0 12 12" fill="none">
+                    <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </a>
+                <Transition name="dropdown">
+                  <div v-if="showProductMenu" class="dropdown-menu">
+                    <a href="#ai-agents" @click.prevent="scrollToSection('ai-agents')">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/>
+                      </svg>
+                      AI 智能体
+                    </a>
+                    <a href="#smart-ocr" @click.prevent="scrollToSection('smart-ocr')">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/>
+                      </svg>
+                      企业信息提取
+                    </a>
+                  </div>
+                </Transition>
+              </li>
             </ul>
           </nav>
 
@@ -217,8 +462,8 @@ onMounted(async () => {
       </div>
     </header>
 
-    <!-- Products Section -->
-    <section id="products" class="products-section">
+    <!-- AI 智能体 Section -->
+    <section id="ai-agents" class="products-section">
       <div class="container">
         <div class="section-header">
           <h2 class="section-title">全栈 AI 产品矩阵</h2>
@@ -261,6 +506,153 @@ onMounted(async () => {
       </div>
     </section>
 
+    <!-- 企业信息提取 Section -->
+    <section id="smart-ocr" class="smart-ocr-section">
+      <div class="container">
+        <div class="section-header">
+          <h2 class="section-title">企业信息提取</h2>
+          <p class="section-desc">智能识别营业执照与企业介绍，自动生成结构化企业档案</p>
+        </div>
+
+        <!-- 表单输入区域 -->
+        <div class="extract-content" v-if="extractStep === 'form'">
+          <div class="extract-form">
+            <p class="form-hint">请至少填写企业名称、统一社会信用代码或上传营业执照其中之一</p>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label>企业名称</label>
+                <input type="text" v-model="extractForm.companyName" placeholder="请输入企业全称" />
+              </div>
+              <div class="form-group">
+                <label>统一社会信用代码</label>
+                <input type="text" v-model="extractForm.creditCode" placeholder="18位统一社会信用代码" />
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label>官网URL（可选）</label>
+              <input type="text" v-model="extractForm.website" placeholder="https://example.com" />
+            </div>
+
+            <div class="upload-row">
+              <!-- 营业执照上传 -->
+              <div
+                class="upload-box"
+                :class="{ 'has-file': extractForm.licenseFile }"
+                @dragover.prevent
+                @drop.prevent="(e) => handleExtractFileDrop(e, 'license')"
+                @click="() => triggerExtractFileInput('license')"
+              >
+                <input ref="licenseInputRef" type="file" accept=".jpg,.jpeg,.png,.pdf,.bmp,.tiff" @change="(e) => handleExtractFileSelect(e, 'license')" style="display:none" />
+                <div class="box-icon">📄</div>
+                <div class="box-title">营业执照</div>
+                <div class="box-hint">拖拽或点击上传</div>
+                <div class="box-formats">PDF / JPG / PNG</div>
+                <div v-if="extractForm.licenseFile" class="box-filename">✓ {{ extractForm.licenseFile.name }}</div>
+              </div>
+
+              <!-- 企业介绍上传 -->
+              <div
+                class="upload-box"
+                :class="{ 'has-file': extractForm.introFile }"
+                @dragover.prevent
+                @drop.prevent="(e) => handleExtractFileDrop(e, 'intro')"
+                @click="() => triggerExtractFileInput('intro')"
+              >
+                <input ref="introInputRef" type="file" accept=".pptx,.ppt,.docx,.doc" @change="(e) => handleExtractFileSelect(e, 'intro')" style="display:none" />
+                <div class="box-icon">📊</div>
+                <div class="box-title">企业介绍（可选）</div>
+                <div class="box-hint">拖拽或点击上传</div>
+                <div class="box-formats">PPT / Word</div>
+                <div v-if="extractForm.introFile" class="box-filename">✓ {{ extractForm.introFile.name }}</div>
+              </div>
+            </div>
+
+            <div class="form-actions">
+              <button class="btn btn-primary" :disabled="!canSubmitExtract || extractLoading" @click="submitExtract">
+                <svg v-if="extractLoading" class="loading-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 2v4m0 12v4m-7-10H2m20 0h-3" stroke-linecap="round"/>
+                </svg>
+                {{ extractLoading ? '提取中...' : '开始提取' }}
+              </button>
+              <button class="btn btn-secondary" @click="resetExtractForm">重置</button>
+            </div>
+
+            <div v-if="extractError" class="form-error">{{ extractError }}</div>
+          </div>
+        </div>
+
+        <!-- 加载状态 -->
+        <div class="extract-loading" v-else-if="extractStep === 'loading'">
+          <div class="loading-spinner-large"></div>
+          <p class="loading-text">{{ extractProgress }}</p>
+          <div class="progress-bar">
+            <div class="progress-fill" :style="{ width: extractProgressPercent + '%' }"></div>
+          </div>
+        </div>
+
+        <!-- 结果展示 -->
+        <div class="extract-result" v-else-if="extractStep === 'result'">
+          <!-- 基础信息 -->
+          <div class="result-card">
+            <div class="card-header">基础信息</div>
+            <div class="card-body">
+              <div class="info-row" v-for="(value, key) in extractResultBasic" :key="key">
+                <span class="info-label">{{ key }}</span>
+                <span class="info-value">{{ value || '-' }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 核心产品 -->
+          <div class="result-card" v-if="extractResultData?.核心产品?.length">
+            <div class="card-header">核心产品</div>
+            <div class="card-body">
+              <ul class="info-list">
+                <li v-for="(item, idx) in extractResultData.核心产品" :key="idx">{{ idx + 1 }}. {{ item }}</li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- 解决方案 -->
+          <div class="result-card" v-if="extractResultData?.解决方案?.length">
+            <div class="card-header">解决方案</div>
+            <div class="card-body">
+              <ul class="info-list">
+                <li v-for="(item, idx) in extractResultData.解决方案" :key="idx">{{ idx + 1 }}. {{ item }}</li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- 能力标签 -->
+          <div class="result-card" v-if="extractResultData?.能力标签?.length">
+            <div class="card-header">能力标签</div>
+            <div class="card-body">
+              <div class="tag-list">
+                <span class="tag" v-for="tag in extractResultData.能力标签" :key="tag">{{ tag }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 原始 OCR 文本（调试用） -->
+          <div class="result-card" v-if="extractRawOcrText">
+            <div class="card-header" style="background: #64748b;">原始 OCR 识别文本</div>
+            <div class="card-body">
+              <pre class="raw-ocr-text">{{ extractRawOcrText }}</pre>
+            </div>
+          </div>
+
+          <!-- 操作按钮 -->
+          <div class="result-actions">
+            <button class="btn btn-primary" @click="downloadWord">下载 Word 文档</button>
+            <button class="btn btn-secondary" @click="downloadJSON">下载 JSON</button>
+            <button class="btn btn-text" @click="resetExtractForm">返回</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- Toast 提示 -->
     <Transition name="toast">
       <div v-if="toastVisible" class="toast-container">
@@ -280,10 +672,10 @@ onMounted(async () => {
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
 
 html, body {
-  overflow: hidden;
-  height: 100%;
   margin: 0;
   padding: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
 .home-page {
@@ -309,7 +701,10 @@ html, body {
   line-height: 1.6;
   font-size: 15px;
   height: 100vh;
-  overflow: hidden;
+  overflow-y: auto;
+  scroll-snap-type: y mandatory;
+  scroll-behavior: smooth;
+  scroll-padding-top: 72px;
 }
 
 .home-page a {
@@ -404,6 +799,89 @@ html, body {
 
 .nav-links a.active {
   color: var(--primary);
+}
+
+/* 产品下拉菜单 */
+.nav-dropdown {
+  position: relative;
+}
+
+.dropdown-trigger {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.dropdown-arrow {
+  transition: transform 0.2s ease;
+}
+
+.dropdown-arrow.rotated {
+  transform: rotate(180deg);
+}
+
+.dropdown-menu {
+  position: absolute;
+  top: calc(100% + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 160px;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+  border: 1px solid var(--border);
+  padding: 8px 0;
+  z-index: 1001;
+}
+
+.dropdown-menu::before {
+  content: '';
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  transform: translateX(-50%) rotate(45deg);
+  width: 12px;
+  height: 12px;
+  background: white;
+  border-left: 1px solid var(--border);
+  border-top: 1px solid var(--border);
+}
+
+.dropdown-menu a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  font-size: 14px;
+  color: var(--text);
+  transition: all 0.2s ease;
+}
+
+.dropdown-menu a:hover {
+  background: var(--primary-light);
+  color: var(--primary);
+}
+
+.dropdown-menu a svg {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.dropdown-menu a:hover svg {
+  color: var(--primary);
+}
+
+/* 下拉菜单动画 */
+.dropdown-enter-active,
+.dropdown-leave-active {
+  transition: all 0.2s ease;
+}
+
+.dropdown-enter-from,
+.dropdown-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-8px);
 }
 
 .header-actions {
@@ -575,8 +1053,10 @@ html, body {
   padding: 24px 0;
   position: relative;
   background: #f5f7fa;
-  overflow: hidden;
   box-sizing: border-box;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+  overflow: hidden;
 }
 
 .products-section .container {
@@ -763,6 +1243,361 @@ html, body {
 
 .card-coming:hover {
   opacity: 0.85;
+}
+
+/* 企业信息提取 Section */
+.smart-ocr-section {
+  min-height: calc(100vh - 72px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 40px 0 60px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  box-sizing: border-box;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+  overflow-y: auto;
+}
+
+.smart-ocr-section .container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  max-width: 800px;
+}
+
+.smart-ocr-section .section-header {
+  margin-bottom: 32px;
+}
+
+/* 提取表单 */
+.extract-content {
+  width: 100%;
+}
+
+.extract-form {
+  background: white;
+  border-radius: 16px;
+  padding: 32px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+  border: 1px solid var(--border);
+}
+
+.form-hint {
+  font-size: 14px;
+  color: #3b82f6;
+  background: #eff6ff;
+  padding: 12px 16px;
+  border-radius: 8px;
+  border-left: 4px solid #3b82f6;
+  margin-bottom: 24px;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+
+.form-group {
+  margin-bottom: 20px;
+}
+
+.form-group label {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.form-group input {
+  width: 100%;
+  padding: 12px 16px;
+  border: 2px solid #e5e7eb;
+  border-radius: 10px;
+  background: #f9fafb;
+  font-size: 15px;
+  font-family: inherit;
+  transition: all 0.2s;
+}
+
+.form-group input:focus {
+  outline: none;
+  border-color: #8b5cf6;
+  background: white;
+  box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.1);
+}
+
+.form-group input::placeholder {
+  color: #9ca3af;
+}
+
+/* 上传区域 */
+.upload-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 24px;
+}
+
+.upload-box {
+  border: 2px dashed #d1d5db;
+  border-radius: 12px;
+  background: #f9fafb;
+  padding: 24px 16px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.3s;
+  min-height: 160px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
+.upload-box:hover {
+  border-color: #8b5cf6;
+  background: #faf5ff;
+  transform: translateY(-2px);
+}
+
+.upload-box.has-file {
+  border-style: solid;
+  border-color: #22c55e;
+  background: #f0fdf4;
+}
+
+.box-icon {
+  font-size: 36px;
+  margin-bottom: 10px;
+}
+
+.box-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+
+.box-hint {
+  font-size: 13px;
+  color: #6b7280;
+  margin-bottom: 4px;
+}
+
+.box-formats {
+  font-size: 12px;
+  color: #9ca3af;
+  background: #e5e7eb;
+  padding: 4px 10px;
+  border-radius: 20px;
+  margin-top: 6px;
+}
+
+.box-filename {
+  font-size: 13px;
+  color: #22c55e;
+  font-weight: 500;
+  margin-top: 10px;
+  word-break: break-all;
+}
+
+/* 表单按钮 */
+.form-actions {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  padding-top: 8px;
+}
+
+.btn-secondary {
+  background: #f3f4f6;
+  color: #4b5563;
+}
+
+.btn-secondary:hover {
+  background: #e5e7eb;
+}
+
+.form-error {
+  color: #ef4444;
+  font-size: 14px;
+  margin-top: 16px;
+  padding: 12px 16px;
+  background: #fef2f2;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.loading-icon {
+  animation: spin 1s linear infinite;
+}
+
+/* 加载状态 */
+.extract-loading {
+  text-align: center;
+  padding: 80px 20px;
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+  width: 100%;
+}
+
+.loading-spinner-large {
+  width: 48px;
+  height: 48px;
+  border: 4px solid #e2e8f0;
+  border-top-color: #6366f1;
+  border-radius: 50%;
+  margin: 0 auto 24px;
+  animation: spin 0.8s linear infinite;
+}
+
+.loading-text {
+  font-size: 18px;
+  color: var(--text);
+  margin-bottom: 24px;
+}
+
+.progress-bar {
+  width: 100%;
+  max-width: 400px;
+  height: 8px;
+  background: #e5e7eb;
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 0 auto;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #6366f1, #8b5cf6);
+  border-radius: 10px;
+  transition: width 0.3s;
+}
+
+/* 结果展示 */
+.extract-result {
+  width: 100%;
+}
+
+.result-card {
+  background: white;
+  border-radius: 12px;
+  margin-bottom: 16px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  border: 1px solid var(--border);
+}
+
+.card-header {
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  color: white;
+  padding: 12px 16px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.card-body {
+  padding: 16px;
+}
+
+.info-row {
+  display: flex;
+  padding: 10px 0;
+  font-size: 14px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.info-row:last-child {
+  border-bottom: none;
+}
+
+.info-label {
+  width: 140px;
+  color: #6b7280;
+  flex-shrink: 0;
+  font-weight: 500;
+}
+
+.info-value {
+  flex: 1;
+  color: var(--text);
+  word-break: break-all;
+}
+
+.info-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.info-list li {
+  padding: 10px 0;
+  font-size: 14px;
+  color: var(--text);
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.info-list li:last-child {
+  border-bottom: none;
+}
+
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tag {
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  color: white;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.result-actions {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 24px;
+}
+
+.raw-ocr-text {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 300px;
+  overflow-y: auto;
+  background: #f8fafc;
+  padding: 12px;
+  border-radius: 8px;
+  font-family: 'Noto Sans SC', monospace;
+}
+
+/* 响应式 */
+@media (max-width: 700px) {
+  .form-row,
+  .upload-row {
+    grid-template-columns: 1fr;
+  }
+
+  .info-row {
+    flex-direction: column;
+  }
+
+  .info-label {
+    width: 100%;
+    margin-bottom: 4px;
+  }
 }
 
 /* Responsive */

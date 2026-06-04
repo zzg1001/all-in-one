@@ -44,6 +44,8 @@ from portal.routers.agent_modules import router as agent_modules_router
 from portal.routers.storage import router as storage_router
 from portal.routers.cleanup import router as cleanup_router
 from portal.routers.feedback import router as portal_feedback_router
+from portal.routers.ocr import router as ocr_router
+from portal.routers.extract import router as extract_router
 
 # Models (确保表被创建)
 import portal.models  # noqa: F401
@@ -128,6 +130,8 @@ app.include_router(agent_modules_router, tags=["Portal - AgentModules"])
 app.include_router(storage_router, tags=["Portal - Storage"])
 app.include_router(cleanup_router, tags=["Portal - Cleanup"])
 app.include_router(portal_feedback_router, tags=["Portal - Feedback"])
+app.include_router(ocr_router, tags=["Portal - OCR"])
+app.include_router(extract_router, tags=["Portal - Extract"])
 
 # 静态文件服务
 app.mount("/outputs", StaticFiles(directory=str(OUTPUTS_DIR)), name="outputs")
