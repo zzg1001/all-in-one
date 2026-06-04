@@ -20,7 +20,7 @@ from .ocr_service import OCRService
 
 logger = logging.getLogger(__name__)
 
-# Skill 路径
+# Skill ID（固定，便于跟踪）
 SKILL_ID = "9edfed14-7f65-4997-93b4-c8c248fea984"
 
 # OCR 服务实例

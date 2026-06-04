@@ -69,9 +69,10 @@ async def lifespan(app: FastAPI):
     setup_log_handler()
     sys_ready()
 
-    # 启动时从 MinIO 同步文件到本地缓存
-    from portal.services.storage_sync_service import sync_all_on_startup
-    await sync_all_on_startup()
+    # MinIO 同步已禁用，使用本地存储
+    # from portal.services.storage_sync_service import sync_all_on_startup
+    # await sync_all_on_startup()
+    logger.info("使用本地存储模式（MinIO 同步已禁用）")
 
     # 启动时先执行一次清理，然后启动定时调度器
     from portal.services.cleanup_service import start_cleanup_scheduler, stop_cleanup_scheduler, run_cleanup

@@ -389,14 +389,13 @@ async def upload_skill(
     if not file.filename or not file.filename.endswith('.zip'):
         raise HTTPException(status_code=400, detail="请上传 ZIP 压缩包")
 
-    # 生成 UUID
-    skill_id = str(uuid.uuid4())
-    temp_folder = TEMP_SKILLS_STORAGE_DIR / f"upload_{skill_id}"
-    skill_folder = SKILLS_STORAGE_DIR / skill_id
+    # 先用临时 ID 解压
+    temp_id = str(uuid.uuid4())
+    temp_folder = TEMP_SKILLS_STORAGE_DIR / f"upload_{temp_id}"
+    temp_zip = TEMP_SKILLS_STORAGE_DIR / f"temp_{temp_id}.zip"
 
     try:
         # 1. 解压到临时目录
-        temp_zip = TEMP_SKILLS_STORAGE_DIR / f"temp_{skill_id}.zip"
         content = await file.read()
         temp_zip.write_bytes(content)
 
@@ -423,11 +422,16 @@ async def upload_skill(
             except json.JSONDecodeError:
                 tags_list = [t.strip() for t in tags.split(",") if t.strip()]
 
-        # 从 config.json 读取描述等信息
+        # 从 config.json 读取配置（包括原始 ID）
+        skill_id = None
         config_file = temp_folder / "config.json"
         if config_file.exists():
             try:
                 config = json.loads(config_file.read_text(encoding="utf-8"))
+                # 如果有原始 ID，使用原始 ID（支持跨环境保持一致）
+                if "id" in config and config["id"]:
+                    skill_id = config["id"]
+                    print(f"[Upload] 使用原始 Skill ID: {skill_id}")
                 # 优先使用 ZIP 包中的描述
                 if "description" in config and config["description"]:
                     description = config["description"]
@@ -441,6 +445,13 @@ async def upload_skill(
                     entry_script = config["entry_script"]
             except Exception:
                 pass
+
+        # 如果没有原始 ID，生成新的
+        if not skill_id:
+            skill_id = str(uuid.uuid4())
+            print(f"[Upload] 生成新 Skill ID: {skill_id}")
+
+        skill_folder = SKILLS_STORAGE_DIR / skill_id
 
         # 如果还没有描述，尝试从 README.md 或 SKILL.md 中读取
         if not description:
@@ -457,8 +468,16 @@ async def upload_skill(
                     except Exception:
                         pass
 
+        # 检查是否已存在（ID 相同的 skill）
+        existing_skill = db.query(Skill).filter(Skill.id == skill_id).first()
+        is_update = existing_skill is not None
+
         # 2. 先写本地（必须成功）
         try:
+            if skill_folder.exists():
+                # 已存在则删除旧的
+                shutil.rmtree(skill_folder)
+                print(f"[Skills] 删除旧文件夹: {skill_folder}")
             shutil.copytree(temp_folder, skill_folder)
             write_version_file(skill_folder, version)
             print(f"[Skills] 本地写入成功: {skill_folder}")
@@ -468,27 +487,42 @@ async def upload_skill(
         # 清理临时目录
         shutil.rmtree(temp_folder, ignore_errors=True)
 
-        # 创建数据库记录（上传只保存本地，同步到 MinIO 需要手动操作）
-        skill = Skill(
-            id=skill_id,
-            group_id=skill_id,
-            name=name,
-            description=description,
-            icon=icon,
-            tags=tags_list,
-            folder_path=skill_id,
-            entry_script=entry_script,
-            author='uploaded',
-            version=version,
-            status="active",
-            minio_synced=False  # 上传时不同步，需要手动同步
-        )
-
-        db.add(skill)
-        db.commit()
-        db.refresh(skill)
-
-        return skill
+        # 创建或更新数据库记录
+        if is_update:
+            # 更新已存在的记录
+            existing_skill.name = name
+            existing_skill.description = description
+            existing_skill.icon = icon
+            existing_skill.tags = tags_list
+            existing_skill.entry_script = entry_script
+            existing_skill.version = version
+            existing_skill.status = "active"
+            existing_skill.deleted_at = None  # 如果之前被软删除，恢复
+            db.commit()
+            db.refresh(existing_skill)
+            print(f"[Skills] 更新已有记录: {skill_id}")
+            return existing_skill
+        else:
+            # 创建新记录
+            skill = Skill(
+                id=skill_id,
+                group_id=skill_id,
+                name=name,
+                description=description,
+                icon=icon,
+                tags=tags_list,
+                folder_path=skill_id,
+                entry_script=entry_script,
+                author='uploaded',
+                version=version,
+                status="active",
+                minio_synced=False
+            )
+            db.add(skill)
+            db.commit()
+            db.refresh(skill)
+            print(f"[Skills] 创建新记录: {skill_id}")
+            return skill
 
     except HTTPException:
         shutil.rmtree(temp_folder, ignore_errors=True)
@@ -575,9 +609,9 @@ async def update_skill(
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
         write_version_file(skill_folder, old_skill.version or "1.0.0")
 
-        # 同步到 MinIO（双写）
-        from portal.services.storage.utils import sync_skill_folder_to_minio
-        await sync_skill_folder_to_minio(skill_folder, old_skill.folder_path)
+        # MinIO 同步已禁用，使用本地存储
+        # from portal.services.storage.utils import sync_skill_folder_to_minio
+        # await sync_skill_folder_to_minio(skill_folder, old_skill.folder_path)
 
         # 直接更新数据库记录
         if "name" in update_data:
@@ -648,9 +682,9 @@ async def update_skill(
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
     write_version_file(new_skill_folder, update_data.get("version") or new_version)
 
-    # 同步新版本文件夹到 MinIO（双写）
-    from portal.services.storage.utils import sync_skill_folder_to_minio
-    await sync_skill_folder_to_minio(new_skill_folder, new_skill_id)
+    # MinIO 同步已禁用，使用本地存储
+    # from portal.services.storage.utils import sync_skill_folder_to_minio
+    # await sync_skill_folder_to_minio(new_skill_folder, new_skill_id)
 
     # 创建新版本记录
     new_skill = Skill(
@@ -720,14 +754,12 @@ async def update_skill_folder(
                 shutil.move(str(item), str(skill_folder / item.name))
             nested_folder.rmdir()
 
-        # 同步到 MinIO（双写，先删旧的再上传新的）
-        from portal.services.storage.utils import sync_skill_folder_to_minio, is_minio_storage, get_storage_backend
-        if is_minio_storage("skills"):
-            # 删除 MinIO 中的旧文件
-            storage = get_storage_backend("skills")
-            await storage.rmdir(skill_id)
-        # 上传新文件
-        await sync_skill_folder_to_minio(skill_folder, skill_id)
+        # MinIO 同步已禁用，使用本地存储
+        # from portal.services.storage.utils import sync_skill_folder_to_minio, is_minio_storage, get_storage_backend
+        # if is_minio_storage("skills"):
+        #     storage = get_storage_backend("skills")
+        #     await storage.rmdir(skill_id)
+        # await sync_skill_folder_to_minio(skill_folder, skill_id)
 
         # 更新版本文件
         write_version_file(skill_folder, skill.version or "1.0.0")
@@ -774,173 +806,67 @@ async def delete_skill(skill_id: str, db: Session = Depends(get_db)):
 @router.post("/{skill_id}/sync")
 async def sync_skill_from_remote(skill_id: str, db: Session = Depends(get_db)):
     """
-    从 MinIO 同步技能文件到本地（拉取）
+    从 MinIO 同步技能文件到本地（拉取）- 已禁用
 
-    用于从远程获取最新的技能文件
+    MinIO 同步功能已禁用，使用本地存储
     """
-    from portal.services.storage_sync_service import sync_skill_from_minio
-
-    skill = db.query(Skill).filter(
-        Skill.id == skill_id,
-        Skill.deleted_at.is_(None)
-    ).first()
-    if not skill:
-        raise HTTPException(status_code=404, detail="技能不存在")
-
-    if not skill.folder_path:
-        raise HTTPException(status_code=400, detail="技能没有配置文件夹")
-
-    result = await sync_skill_from_minio(skill.folder_path, force=True)
-
-    if result["success"]:
-        return {
-            "success": True,
-            "message": result["message"],
-            "skill_id": skill_id,
-            "skill_name": skill.name,
-            "synced_files": result["synced_files"]
-        }
-    else:
-        raise HTTPException(status_code=500, detail=result["message"])
+    return {
+        "success": False,
+        "message": "MinIO 同步已禁用，使用本地存储",
+        "skill_id": skill_id
+    }
 
 
 @router.post("/{skill_id}/push")
 async def push_skill_to_remote(skill_id: str, db: Session = Depends(get_db)):
     """
-    将本地技能文件推送到 MinIO（推送）
+    将本地技能文件推送到 MinIO（推送）- 已禁用
 
-    用于本地修改技能代码后，推送到远程供其他节点同步
+    MinIO 同步功能已禁用，使用本地存储
     """
-    from portal.services.storage.utils import sync_skill_folder_to_minio, is_minio_storage
-
-    if not is_minio_storage("skills"):
-        raise HTTPException(status_code=400, detail="Skills 未配置 MinIO 存储，无法推送")
-
-    skill = db.query(Skill).filter(
-        Skill.id == skill_id,
-        Skill.deleted_at.is_(None)
-    ).first()
-    if not skill:
-        raise HTTPException(status_code=404, detail="技能不存在")
-
-    if not skill.folder_path:
-        raise HTTPException(status_code=400, detail="技能没有配置文件夹")
-
-    skill_folder = SKILLS_STORAGE_DIR / skill.folder_path
-    if not skill_folder.exists():
-        raise HTTPException(status_code=404, detail=f"本地技能文件夹不存在: {skill_folder}")
-
-    uploaded_count = await sync_skill_folder_to_minio(skill_folder, skill.folder_path)
-
-    # 更新同步状态
-    skill.minio_synced = True
-    db.commit()
-
     return {
-        "success": True,
-        "message": f"推送完成，共上传 {uploaded_count} 个文件",
-        "skill_id": skill_id,
-        "skill_name": skill.name,
-        "uploaded_files": uploaded_count,
-        "minio_synced": True
+        "success": False,
+        "message": "MinIO 同步已禁用，使用本地存储",
+        "skill_id": skill_id
     }
 
 
 @router.post("/sync-all")
 async def sync_all_skills_from_remote(db: Session = Depends(get_db)):
     """
-    从 MinIO 同步所有技能文件到本地（拉取）
+    从 MinIO 同步所有技能文件到本地（拉取）- 已禁用
 
-    用于从远程获取所有最新的技能文件
+    MinIO 同步功能已禁用，使用本地存储
     """
-    from portal.services.storage_sync_service import sync_skills_from_minio
-
-    # 获取所有活跃的技能
-    skills = db.query(Skill).filter(
-        Skill.deleted_at.is_(None),
-        Skill.folder_path.isnot(None)
-    ).all()
-
-    if not skills:
-        return {"success": True, "message": "没有需要同步的技能", "total_synced": 0}
-
-    skill_folders = [s.folder_path for s in skills]
-    result = await sync_skills_from_minio(skill_folders, force=True)
-
     return {
-        "success": True,
-        "message": f"同步完成，共同步 {result['total_synced']} 个文件",
-        "total_synced": result["total_synced"],
-        "skills_count": len(skills)
+        "success": False,
+        "message": "MinIO 同步已禁用，使用本地存储"
     }
 
 
 @router.post("/discover")
 async def discover_skills_from_minio():
     """
-    从 MinIO 发现并导入新技能
+    从 MinIO 发现并导入新技能 - 已禁用
 
-    扫描 MinIO 中的所有技能文件夹，对于数据库中不存在的技能：
-    1. 解析 SKILL.md 或 config.json 获取元数据
-    2. 创建数据库记录
-    3. 同步文件到本地
-
-    这个 API 用于导入从其他环境上传到 MinIO 的技能
+    MinIO 同步功能已禁用，使用本地存储
     """
-    from portal.services.storage_sync_service import discover_and_import_skills_from_minio
-
-    result = await discover_and_import_skills_from_minio()
-
-    if not result["success"]:
-        raise HTTPException(status_code=500, detail=result.get("message", "导入失败"))
-
-    return result
+    return {
+        "success": False,
+        "message": "MinIO 同步已禁用，使用本地存储"
+    }
 
 
 @router.post("/push-all")
 async def push_all_skills_to_remote(db: Session = Depends(get_db)):
     """
-    将所有本地技能文件推送到 MinIO（推送）
+    将所有本地技能文件推送到 MinIO（推送）- 已禁用
 
-    用于本地批量修改技能代码后，推送到远程供其他节点同步
+    MinIO 同步功能已禁用，使用本地存储
     """
-    from portal.services.storage.utils import sync_skill_folder_to_minio, is_minio_storage
-
-    if not is_minio_storage("skills"):
-        raise HTTPException(status_code=400, detail="Skills 未配置 MinIO 存储，无法推送")
-
-    # 获取所有活跃的技能
-    skills = db.query(Skill).filter(
-        Skill.deleted_at.is_(None),
-        Skill.folder_path.isnot(None)
-    ).all()
-
-    if not skills:
-        return {"success": True, "message": "没有需要推送的技能", "total_uploaded": 0}
-
-    total_uploaded = 0
-    success_count = 0
-    failed_skills = []
-
-    for skill in skills:
-        skill_folder = SKILLS_STORAGE_DIR / skill.folder_path
-        if skill_folder.exists():
-            try:
-                count = await sync_skill_folder_to_minio(skill_folder, skill.folder_path)
-                total_uploaded += count
-                success_count += 1
-            except Exception as e:
-                failed_skills.append({"id": skill.id, "name": skill.name, "error": str(e)})
-        else:
-            failed_skills.append({"id": skill.id, "name": skill.name, "error": "本地文件夹不存在"})
-
     return {
-        "success": True,
-        "message": f"推送完成，{success_count}/{len(skills)} 个技能成功，共上传 {total_uploaded} 个文件",
-        "total_uploaded": total_uploaded,
-        "success_count": success_count,
-        "skills_count": len(skills),
-        "failed": failed_skills if failed_skills else None
+        "success": False,
+        "message": "MinIO 同步已禁用，使用本地存储"
     }
 
 
@@ -1040,6 +966,18 @@ async def download_skill(skill_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="技能文件夹不存在")
 
     try:
+        # 确保 config.json 包含 skill ID（便于跨环境保持一致）
+        config_file = skill_folder / "config.json"
+        if config_file.exists():
+            try:
+                config = json.loads(config_file.read_text(encoding="utf-8"))
+                if config.get("id") != skill_id:
+                    config["id"] = skill_id
+                    config_file.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+                    print(f"[Download] 更新 config.json，添加 ID: {skill_id}")
+            except Exception as e:
+                print(f"[Download] 更新 config.json 失败: {e}")
+
         # 创建内存中的 ZIP 文件
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
