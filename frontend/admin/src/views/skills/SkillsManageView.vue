@@ -59,7 +59,36 @@ const parsed = ref(false)  // 是否已解析
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const batchFileInputRef = ref<HTMLInputElement | null>(null)
 const parsedFiles = ref<string[]>([])  // 解析出的文件列表
-const isDragging = ref(false)  // 拖拽状态
+const isDragging = ref(false)  // 文件拖拽状态
+
+// 弹框拖动（只改变位置，不改变窗口大小）
+const modalPos = ref({ x: 0, y: 0 })
+let modalDragStart: { mouseX: number; mouseY: number; posX: number; posY: number } | null = null
+
+const onModalDrag = (e: MouseEvent) => {
+  if (!modalDragStart) return
+  modalPos.value = {
+    x: modalDragStart.posX + (e.clientX - modalDragStart.mouseX),
+    y: modalDragStart.posY + (e.clientY - modalDragStart.mouseY)
+  }
+}
+
+const stopModalDrag = () => {
+  modalDragStart = null
+  window.removeEventListener('mousemove', onModalDrag)
+  window.removeEventListener('mouseup', stopModalDrag)
+}
+
+const startModalDrag = (e: MouseEvent) => {
+  modalDragStart = {
+    mouseX: e.clientX,
+    mouseY: e.clientY,
+    posX: modalPos.value.x,
+    posY: modalPos.value.y
+  }
+  window.addEventListener('mousemove', onModalDrag)
+  window.addEventListener('mouseup', stopModalDrag)
+}
 
 // 创建弹窗
 const showCreateModal = ref(false)
@@ -117,6 +146,7 @@ const openUploadModal = () => {
   uploadFile.value = null
   parsed.value = false
   parsedFiles.value = []
+  modalPos.value = { x: 0, y: 0 }
   showUploadModal.value = true
 }
 
@@ -192,16 +222,10 @@ const handleBatchFileSelect = async (e: Event) => {
 
   for (const file of files) {
     try {
-      const result = await skillsApi.upload(file, {
+      await skillsApi.upload(file, {
         name: file.name.replace('.zip', ''),
         icon: '⚡'
       })
-      // 上传成功后尝试同步到 MinIO
-      try {
-        await skillsApi.push(result.id)
-      } catch (e) {
-        console.warn(`同步 ${file.name} 到 MinIO 失败:`, e)
-      }
       successCount++
     } catch (e) {
       console.error(`上传 ${file.name} 失败:`, e)
@@ -227,7 +251,7 @@ const handleUpload = async () => {
 
   uploading.value = true
   try {
-    // 1. 上传到本地
+    // 上传到本地
     const result = await skillsApi.upload(uploadFile.value, {
       name: uploadForm.value.name,
       description: uploadForm.value.description,
@@ -237,24 +261,13 @@ const handleUpload = async () => {
       entry_script: uploadForm.value.entry_script
     })
 
-    // 2. 同步到 MinIO
-    let synced = false
-    try {
-      await skillsApi.push(result.id)
-      synced = true
-      result.minio_synced = true
-    } catch (e) {
-      console.warn('同步到 MinIO 失败:', e)
-    }
-
-    // 3. 直接添加到列表（不刷新页面）
+    // 直接添加到列表（不刷新页面）
     skills.value.push(result)
 
-    // 4. 关闭弹框
+    // 关闭弹框
     showUploadModal.value = false
 
-    // 5. 提示
-    toast.value?.success(synced ? '上传成功' : '上传成功，同步失败')
+    toast.value?.success('上传成功')
   } catch (e) {
     toast.value?.error('上传失败: ' + e)
   } finally {
@@ -354,66 +367,6 @@ const batchDelete = async () => {
   toast.value?.show(`已删除 ${successCount} 个技能`, 'dark')
 }
 
-// 推送到 MinIO
-const pushSkill = async (skill: Skill) => {
-  try {
-    await skillsApi.push(skill.id)
-    // 更新本地状态
-    const idx = skills.value.findIndex(s => s.id === skill.id)
-    if (idx !== -1) {
-      skills.value[idx] = { ...skills.value[idx], minio_synced: true }
-    }
-    toast.value?.success(`已同步到 MinIO`)
-  } catch (e) {
-    toast.value?.error('同步失败: ' + e)
-  }
-}
-
-// 批量推送
-const batchPush = async () => {
-  if (selectedIds.value.size === 0) {
-    toast.value?.warning('请先选择要推送的技能')
-    return
-  }
-
-  const total = selectedIds.value.size
-  let successCount = 0
-
-  for (const id of selectedIds.value) {
-    try {
-      await skillsApi.push(id)
-      // 更新本地状态
-      const idx = skills.value.findIndex(s => s.id === id)
-      if (idx !== -1) {
-        skills.value[idx] = { ...skills.value[idx], minio_synced: true }
-      }
-      successCount++
-    } catch (e) {
-      console.error(`推送失败:`, e)
-    }
-  }
-
-  // 清除选择
-  selectedIds.value.clear()
-  toast.value?.success(`推送完成：${successCount}/${total}`)
-}
-
-// 从 MinIO 拉取全部
-const syncAll = async () => {
-  const confirmed = await confirmDialog.value?.confirm(
-    '从 MinIO 拉取最新技能到本地',
-    { title: '拉取技能', type: 'info' }
-  )
-  if (!confirmed) return
-  try {
-    const result = await skillsApi.syncAll()
-    toast.value?.success(result.message || '同步完成')
-    loadSkills(false)
-  } catch (e) {
-    toast.value?.error('同步失败: ' + e)
-  }
-}
-
 // 截断文本
 const truncate = (text: string | undefined, maxLen: number) => {
   if (!text) return ''
@@ -447,14 +400,6 @@ onMounted(() => {
           </svg>
           <input v-model="searchQuery" type="text" placeholder="搜索" />
         </div>
-        <button class="btn-icon" title="从 MinIO 拉取" @click="syncAll">
-          <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/></svg>
-        </button>
-        <button class="btn-push" :disabled="stats.selected === 0" @click="batchPush">
-          <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clip-rule="evenodd"/></svg>
-          推送MinIO
-          <span v-if="stats.selected > 0" class="push-badge">{{ stats.selected }}</span>
-        </button>
         <button class="btn-add" @click="openCreateModal">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <path d="M12 5v14M5 12h14"/>
@@ -494,9 +439,6 @@ onMounted(() => {
               </div>
             </div>
             <div class="card-right">
-              <!-- 同步状态 -->
-              <span v-if="skill.minio_synced" class="sync-badge synced" title="已同步到 MinIO">✓</span>
-              <span v-else class="sync-badge not-synced" title="未同步到 MinIO">⚠</span>
               <span class="card-version">v{{ skill.version || '1.0' }}</span>
             </div>
           </div>
@@ -553,10 +495,13 @@ onMounted(() => {
 
     <!-- 上传弹窗 -->
     <div v-if="showUploadModal" class="modal-overlay" @click.self="showUploadModal = false">
-      <div class="modal-content apple-modal">
-        <div class="modal-header-mini">
+      <div
+        class="modal-content apple-modal"
+        :style="{ transform: `translate(${modalPos.x}px, ${modalPos.y}px)` }"
+      >
+        <div class="modal-header-mini drag-handle" @mousedown.prevent="startModalDrag">
           <span>上传技能</span>
-          <button class="close-x" @click="showUploadModal = false">&times;</button>
+          <button class="close-x" @mousedown.stop @click="showUploadModal = false">&times;</button>
         </div>
         <div class="modal-body">
           <!-- 步骤 1: 选择文件 -->
@@ -629,7 +574,7 @@ onMounted(() => {
             </div>
           </template>
 
-          <div class="tip-box">提交后自动保存到本地并同步到 MinIO</div>
+          <div class="tip-box">提交后保存到本地</div>
         </div>
         <div class="modal-footer-apple">
           <button class="apple-btn primary" :disabled="uploading || parsing || !parsed" @click="handleUpload">
@@ -1255,6 +1200,12 @@ onMounted(() => {
   font-size: 13px;
   font-weight: 500;
   color: #374151;
+}
+
+/* 弹框表头可拖动 */
+.drag-handle {
+  cursor: move;
+  user-select: none;
 }
 
 .close-x {

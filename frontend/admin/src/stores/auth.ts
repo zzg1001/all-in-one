@@ -36,7 +36,7 @@ const USER_KEY = 'auth_user'
 // Cookie 配置
 const COOKIE_OPTIONS = {
   path: '/',
-  maxAge: 30 * 60,  // 30 分钟，与 JWT 过期时间一致
+  maxAge: 24 * 60 * 60,  // 24 小时，与后端 JWT 过期时间 (ACCESS_TOKEN_EXPIRE_MINUTES=1440) 一致
   sameSite: 'lax' as const,
 }
 
