@@ -11,7 +11,8 @@ const showLogPanel = ref(false)
 
 // 是否是首页或管理页面（不显示 Portal 组件）
 const isHomePage = computed(() => {
-  return route.path === '/' || route.path === '/skills-market' || route.path.startsWith('/admin')
+  return route.path === '/' || route.path === '/skills-market'
+    || route.path === '/extract-history' || route.path.startsWith('/admin')
 })
 
 // 从 URL 获取 agent 名称，提取部门名（去掉 " Agent" 后缀）

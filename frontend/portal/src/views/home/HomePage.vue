@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import config from '@/config'
 import { setLocale, getLocale } from '@/locales'
 import { useAuthStore } from '@/stores/auth'
-import { agentsApi } from '@/api'
+import { agentsApi, extractHistoryApi } from '@/api'
+import EnterpriseInfoForm from '@/components/extract/EnterpriseInfoForm.vue'
+import { base64ToBlob, triggerDownload, WORD_MIME } from '@/utils/download'
 import '@/assets/home.css'
 import './HomePage.css'
 
@@ -164,24 +166,13 @@ const extractResultData = ref<any>(null)
 const extractWordBase64 = ref('')
 const extractRawOcrText = ref('')
 
-// 基础信息字段映射（兼容多种字段名）
-const extractResultBasic = computed(() => {
-  if (!extractResultData.value) return {}
-  const data = extractResultData.value
-  return {
-    '企业名称': data.企业名称 || '',
-    '统一社会信用代码': data.统一社会信用码 || data.统一社会信用代码 || '',
-    '法定代表人': data.法定代表人 || '',
-    '注册资本': data.注册资本 || '',
-    '成立时间': data.成立时间 || data.成立日期 || '',
-    '注册时间': data.注册时间 || data.核准日期 || '',
-    '注册地址': data.注册地址 || data.住所 || '',
-    '企业性质': data.企业性质 || data.企业类型 || '',
-    '经营范围': data.经营范围 || '',
-    '官网': data.官网 || '',
-    '简介': data.简介 || ''
-  }
-})
+// 可编辑企业信息表单组件引用（基础信息/产品等编辑表单已抽成 EnterpriseInfoForm）
+const infoFormRef = ref<InstanceType<typeof EnterpriseInfoForm> | null>(null)
+
+// 取表单当前（编辑后）数据；无表单时回退原始数据
+function buildEditedData(): Record<string, any> {
+  return infoFormRef.value?.buildEditedData() ?? { ...(extractResultData.value || {}) }
+}
 
 // 是否可以提交
 const canSubmitExtract = computed(() => {
@@ -241,6 +232,111 @@ function resetExtractForm() {
   extractError.value = ''
   extractResultData.value = null
   extractWordBase64.value = ''
+  actionsPos.value = null  // 复位浮框位置
+}
+
+// ========== 浮框拖动 ==========
+const actionsRef = ref<HTMLElement | null>(null)
+const actionsPos = ref<{ x: number; y: number } | null>(null)
+const isDraggingActions = ref(false)
+let dragOffset = { x: 0, y: 0 }
+
+// 滚动惯性跟随：用「跟随者平滑逼近真实滚动位置」产生惯性，
+// 关键：在 rAF 里【直接改 DOM 的 transform】，不走 Vue 响应式，避免整组件每帧重渲染导致卡顿/抖动。
+let realScroll = 0                 // 最新真实滚动位置
+let followScroll = 0               // 平滑跟随者（落后于 realScroll → 产生惯性）
+let followRaf: number | null = null
+let scrollContainer: HTMLElement | Window | null = null
+
+const LAG_MAX = 50                 // 最大偏移幅度
+const FOLLOW_EASE = 0.12           // 跟随者每帧逼近真实位置的比例（越小越“肉”、惯性越强）
+const LAG_FACTOR = 0.6             // 偏移 = 落后距离 × 此系数（越大位移越明显）
+
+function getScrollTop(): number {
+  if (scrollContainer && scrollContainer !== window) {
+    return (scrollContainer as HTMLElement).scrollTop
+  }
+  return window.scrollY
+}
+
+// 直接操作 DOM，避免响应式重渲染
+function applyActionsTransform(y: number) {
+  const el = actionsRef.value
+  if (!el) return
+  el.style.transform = y === 0 ? '' : `translate3d(0, ${y}px, 0)`
+}
+
+function followStep() {
+  // 跟随者指数缓动逼近真实滚动位置（平滑、无噪声）
+  followScroll += (realScroll - followScroll) * FOLLOW_EASE
+  const gap = realScroll - followScroll
+  let offset = Math.max(-LAG_MAX, Math.min(LAG_MAX, gap * LAG_FACTOR))
+  if (!actionsPos.value) applyActionsTransform(offset)
+  // 跟随者追上 → 收敛归位
+  if (Math.abs(gap) < 0.3) {
+    followScroll = realScroll
+    if (!actionsPos.value) applyActionsTransform(0)
+    followRaf = null
+    return
+  }
+  followRaf = requestAnimationFrame(followStep)
+}
+
+function onPageScroll() {
+  // 仅在结果页、且未拖动时生效
+  if (extractStep.value !== 'result' || actionsPos.value) return
+  realScroll = getScrollTop()
+  if (followRaf == null) followRaf = requestAnimationFrame(followStep)
+}
+
+// 拖动后切换为 fixed 定位（滚动惯性的 transform 由 rAF 直接管理，不在此处）
+const actionsStyle = computed(() => {
+  if (actionsPos.value) {
+    return {
+      position: 'fixed',
+      left: actionsPos.value.x + 'px',
+      top: actionsPos.value.y + 'px',
+      right: 'auto',
+      bottom: 'auto',
+      margin: '0',
+    } as Record<string, string>
+  }
+  return {}
+})
+
+function onDragMove(e: PointerEvent) {
+  if (!actionsPos.value) return
+  const el = actionsRef.value
+  const w = el?.offsetWidth || 116
+  const h = el?.offsetHeight || 140
+  let x = e.clientX - dragOffset.x
+  let y = e.clientY - dragOffset.y
+  // 限制在视口内
+  x = Math.min(Math.max(8, x), window.innerWidth - w - 8)
+  y = Math.min(Math.max(8, y), window.innerHeight - h - 8)
+  actionsPos.value = { x, y }
+}
+
+function onDragEnd() {
+  isDraggingActions.value = false
+  window.removeEventListener('pointermove', onDragMove)
+  window.removeEventListener('pointerup', onDragEnd)
+}
+
+function startDragActions(e: PointerEvent) {
+  const el = actionsRef.value
+  if (!el) return
+  // 清掉滚动惯性的 transform，避免拖动定位被偏移
+  if (followRaf != null) { cancelAnimationFrame(followRaf); followRaf = null }
+  el.style.transform = ''
+  followScroll = realScroll = getScrollTop()
+  const rect = el.getBoundingClientRect()
+  actionsPos.value = { x: rect.left, y: rect.top }
+  dragOffset = { x: e.clientX - rect.left, y: e.clientY - rect.top }
+  isDraggingActions.value = true
+  window.addEventListener('pointermove', onDragMove)
+  window.addEventListener('pointerup', onDragEnd)
+  e.preventDefault()
 }
 
 // 提交提取
@@ -287,6 +383,7 @@ async function submitExtract() {
       extractWordBase64.value = data.word_file_base64 || ''
       extractRawOcrText.value = data.raw_ocr_text || ''
       extractStep.value = 'result'
+      // 表单初始化与文本域撑高由 EnterpriseInfoForm 组件内部处理
     } else {
       throw new Error(data.error || '提取失败')
     }
@@ -298,47 +395,66 @@ async function submitExtract() {
   }
 }
 
-// 下载 Word 文档
-function downloadWord() {
-  if (!extractWordBase64.value) {
-    showToast('Word 文件生成中，请稍后重试')
-    return
-  }
+// 下载 Word 文档（用编辑后的内容重新生成）
+const downloadingWord = ref(false)
+async function downloadWord() {
+  if (downloadingWord.value) return
+  downloadingWord.value = true
+  try {
+    const edited = buildEditedData()
+    const response = await fetch('/api/extract/word', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(edited)
+    })
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}))
+      throw new Error(errData.detail || 'Word 生成失败')
+    }
+    const data = await response.json()
+    if (!data.success || !data.word_file_base64) throw new Error('Word 生成失败')
 
-  const byteCharacters = atob(extractWordBase64.value)
-  const byteNumbers = new Array(byteCharacters.length)
-  for (let i = 0; i < byteCharacters.length; i++) {
-    byteNumbers[i] = byteCharacters.charCodeAt(i)
+    const blob = base64ToBlob(data.word_file_base64, WORD_MIME)
+    triggerDownload(blob, (edited['企业名称'] || '企业') + '_企业档案.docx')
+  } catch (err: any) {
+    showToast(err.message || 'Word 生成失败，请稍后重试')
+  } finally {
+    downloadingWord.value = false
   }
-  const byteArray = new Uint8Array(byteNumbers)
-  const blob = new Blob([byteArray], {
-    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-  })
-
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = (extractResultData.value?.企业名称 || '企业') + '_企业档案.docx'
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
 }
 
-// 下载 JSON
+// 下载 JSON（编辑后的内容）
 function downloadJSON() {
   if (!extractResultData.value) return
-
-  const jsonStr = JSON.stringify(extractResultData.value, null, 2)
+  const edited = buildEditedData()
+  const jsonStr = JSON.stringify(edited, null, 2)
   const blob = new Blob([jsonStr], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = (extractResultData.value?.企业名称 || '企业') + '_data.json'
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
+  triggerDownload(blob, (edited['企业名称'] || '企业') + '_data.json')
+}
+
+// 保存当前（编辑后）企业信息到历史
+const savingRecord = ref(false)
+async function saveExtractRecord() {
+  if (savingRecord.value || !extractResultData.value) return
+  savingRecord.value = true
+  try {
+    const edited = buildEditedData()
+    await extractHistoryApi.create({
+      company_name: edited['企业名称'] || '',
+      credit_code: edited['统一社会信用代码'] || edited['统一社会信用码'] || '',
+      data: edited,
+    })
+    showToast('保存成功')
+  } catch (err: any) {
+    showToast(err?.message || '保存失败，请稍后重试')
+  } finally {
+    savingRecord.value = false
+  }
+}
+
+// 跳转到历史记录页面
+function goToHistory() {
+  router.push('/extract-history')
 }
 
 // 产品下拉菜单
@@ -369,11 +485,22 @@ onMounted(async () => {
       showProductMenu.value = false
     }
   })
+
+  // 监听滚动，驱动浮框的滚动惯性跟随（.home-page 是实际滚动容器）
+  await nextTick()
+  scrollContainer = document.querySelector('.home-page') || window
+  realScroll = followScroll = getScrollTop()
+  scrollContainer.addEventListener('scroll', onPageScroll, { passive: true })
+})
+
+onUnmounted(() => {
+  if (scrollContainer) scrollContainer.removeEventListener('scroll', onPageScroll)
+  if (followRaf != null) cancelAnimationFrame(followRaf)
 })
 </script>
 
 <template>
-  <div class="home-page">
+  <div class="home-page" :class="{ 'snap-off': extractStep === 'result' }">
     <!-- Header -->
     <header class="header">
       <div class="container">
@@ -560,11 +687,11 @@ onMounted(async () => {
                 @drop.prevent="(e) => handleExtractFileDrop(e, 'intro')"
                 @click="() => triggerExtractFileInput('intro')"
               >
-                <input ref="introInputRef" type="file" accept=".pptx,.ppt,.docx,.doc" @change="(e) => handleExtractFileSelect(e, 'intro')" style="display:none" />
+                <input ref="introInputRef" type="file" accept=".pptx,.ppt,.docx,.doc,.pdf" @change="(e) => handleExtractFileSelect(e, 'intro')" style="display:none" />
                 <div class="box-icon">📊</div>
                 <div class="box-title">企业介绍（可选）</div>
                 <div class="box-hint">拖拽或点击上传</div>
-                <div class="box-formats">PPT / Word</div>
+                <div class="box-formats">PPT / Word / PDF</div>
                 <div v-if="extractForm.introFile" class="box-filename">✓ {{ extractForm.introFile.name }}</div>
               </div>
             </div>
@@ -577,6 +704,14 @@ onMounted(async () => {
                 {{ extractLoading ? '提取中...' : '开始提取' }}
               </button>
               <button class="btn btn-secondary" @click="resetExtractForm">重置</button>
+              <button class="btn btn-history" @click="goToHistory">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M3 3v5h5" stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M3.05 13A9 9 0 106 5.3L3 8" stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M12 7v5l3 2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                历史记录
+              </button>
             </div>
 
             <div v-if="extractError" class="form-error">{{ extractError }}</div>
@@ -594,58 +729,29 @@ onMounted(async () => {
 
         <!-- 结果展示 -->
         <div class="extract-result" v-else-if="extractStep === 'result'">
-          <!-- 基础信息 -->
-          <div class="result-card">
-            <div class="card-header">基础信息</div>
-            <div class="card-body">
-              <div class="info-row" v-for="(value, key) in extractResultBasic" :key="key">
-                <span class="info-label">{{ key }}</span>
-                <span class="info-value">{{ value || '-' }}</span>
-              </div>
-            </div>
+          <div class="result-main">
+            <EnterpriseInfoForm
+              ref="infoFormRef"
+              :source="extractResultData"
+              :raw-ocr-text="extractRawOcrText"
+            />
           </div>
 
-          <!-- 核心产品 -->
-          <div class="result-card" v-if="extractResultData?.核心产品?.length">
-            <div class="card-header">核心产品</div>
-            <div class="card-body">
-              <ul class="info-list">
-                <li v-for="(item, idx) in extractResultData.核心产品" :key="idx">{{ idx + 1 }}. {{ item }}</li>
-              </ul>
+          <!-- 操作按钮（浮框，可拖动） -->
+          <div
+            class="result-actions"
+            :class="{ dragging: isDraggingActions }"
+            ref="actionsRef"
+            :style="actionsStyle"
+          >
+            <div class="drag-handle" @pointerdown="startDragActions" title="拖动">
+              <span class="drag-dots">⠿</span> 拖动
             </div>
-          </div>
-
-          <!-- 解决方案 -->
-          <div class="result-card" v-if="extractResultData?.解决方案?.length">
-            <div class="card-header">解决方案</div>
-            <div class="card-body">
-              <ul class="info-list">
-                <li v-for="(item, idx) in extractResultData.解决方案" :key="idx">{{ idx + 1 }}. {{ item }}</li>
-              </ul>
-            </div>
-          </div>
-
-          <!-- 能力标签 -->
-          <div class="result-card" v-if="extractResultData?.能力标签?.length">
-            <div class="card-header">能力标签</div>
-            <div class="card-body">
-              <div class="tag-list">
-                <span class="tag" v-for="tag in extractResultData.能力标签" :key="tag">{{ tag }}</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- 原始 OCR 文本（调试用） -->
-          <div class="result-card" v-if="extractRawOcrText">
-            <div class="card-header" style="background: #64748b;">原始 OCR 识别文本</div>
-            <div class="card-body">
-              <pre class="raw-ocr-text">{{ extractRawOcrText }}</pre>
-            </div>
-          </div>
-
-          <!-- 操作按钮 -->
-          <div class="result-actions">
-            <button class="btn btn-primary" @click="downloadWord">下载 Word 文档</button>
+            <button class="btn btn-primary" :disabled="savingRecord" @click="saveExtractRecord">
+              {{ savingRecord ? '保存中...' : '保存' }}
+            </button>
+            <button class="btn btn-secondary" @click="goToHistory">历史</button>
+            <button class="btn btn-secondary" @click="downloadWord">下载 Word</button>
             <button class="btn btn-secondary" @click="downloadJSON">下载 JSON</button>
             <button class="btn btn-text" @click="resetExtractForm">返回</button>
           </div>
@@ -705,6 +811,11 @@ html, body {
   scroll-snap-type: y mandatory;
   scroll-behavior: smooth;
   scroll-padding-top: 72px;
+}
+
+/* 查看解析结果时关闭整屏吸附：结果内容远高于一屏，强制吸附会与下拉较劲导致抖动 */
+.home-page.snap-off {
+  scroll-snap-type: none;
 }
 
 .home-page a {
@@ -1256,7 +1367,6 @@ html, body {
   box-sizing: border-box;
   scroll-snap-align: start;
   scroll-snap-stop: always;
-  overflow-y: auto;
 }
 
 .smart-ocr-section .container {
@@ -1269,6 +1379,22 @@ html, body {
 
 .smart-ocr-section .section-header {
   margin-bottom: 32px;
+}
+
+/* 历史记录按钮（与开始提取/重置同排） */
+.btn-history {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  color: #4b5563;
+  transition: border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+.btn-history:hover {
+  border-color: #6366f1;
+  color: #6366f1;
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.16);
 }
 
 /* 提取表单 */
@@ -1482,6 +1608,16 @@ html, body {
 /* 结果展示 */
 .extract-result {
   width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.result-main {
+  /* 固定宽度（预留浮框 116px + 间距 16px），拖动浮框时内容窗口宽度不变 */
+  flex: 0 0 auto;
+  width: calc(100% - 132px);
+  min-width: 0;
 }
 
 .result-card {
@@ -1507,7 +1643,9 @@ html, body {
 
 .info-row {
   display: flex;
-  padding: 10px 0;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 0;
   font-size: 14px;
   border-bottom: 1px solid #f3f4f6;
 }
@@ -1517,16 +1655,60 @@ html, body {
 }
 
 .info-label {
-  width: 140px;
+  width: 120px;
   color: #6b7280;
   flex-shrink: 0;
   font-weight: 500;
+  padding-top: 7px;
+  line-height: 1.5;
 }
 
 .info-value {
   flex: 1;
   color: var(--text);
   word-break: break-all;
+}
+
+/* 可编辑输入框（textarea，自动撑高、自动换行、不截断） */
+.info-input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 14px;
+  font-family: inherit;
+  line-height: 1.5;
+  color: var(--text);
+  background: #f8fafc;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 6px 8px;
+  resize: none;            /* 由 v-auto-grow 控制高度 */
+  overflow: hidden;        /* 无滚动条，内容靠撑高显示 */
+  white-space: pre-wrap;   /* 保留换行并自动折行 */
+  word-break: break-word;  /* 长串也能换行，不会被截断 */
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+.info-input:hover {
+  background: #f1f5f9;
+}
+.info-input:focus {
+  outline: none;
+  background: #fff;
+  border-color: var(--primary, #1677FF);
+}
+
+/* 区块级输入框（核心产品/解决方案等，整行铺满） */
+.block-input {
+  display: block;
+  width: 100%;
+}
+
+.card-header-hint {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .info-list {
@@ -1561,11 +1743,120 @@ html, body {
   font-weight: 500;
 }
 
+/* 浮框：贴着结果窗口右侧，随滚动停靠在视口中间，仅在结果区内出现 */
 .result-actions {
+  position: sticky;
+  top: calc(50vh - 70px);
+  flex-shrink: 0;
+  width: 116px;
+  z-index: 20;
   display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  margin: 0;
+  padding: 10px;
+  background: #fff;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 10px;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
+  animation: floatPanelIn 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+  /* 滚动惯性的 transform 由 JS 逐帧直接写在 style 上（GPU 合成），不加过渡 */
+  transition: box-shadow 0.25s ease;
+  will-change: transform;
+}
+
+/* 悬停阴影加深（位移交给 JS 惯性，避免与之冲突） */
+.result-actions:hover {
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18);
+}
+
+/* 拖动手柄 */
+.drag-handle {
+  display: flex;
+  align-items: center;
   justify-content: center;
-  gap: 16px;
-  margin-top: 24px;
+  gap: 4px;
+  font-size: 11px;
+  color: #94a3b8;
+  cursor: grab;
+  user-select: none;
+  padding: 2px 0 4px;
+  margin-bottom: 2px;
+  border-bottom: 1px dashed #e2e8f0;
+  touch-action: none;
+}
+.drag-handle .drag-dots {
+  font-size: 14px;
+  line-height: 1;
+}
+
+/* 拖动中：关闭动效，固定停靠位置，光标变抓握 */
+.result-actions.dragging {
+  animation: none;
+  transition: none;
+  transform: none !important;
+  cursor: grabbing;
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.22);
+}
+.result-actions.dragging .drag-handle {
+  cursor: grabbing;
+}
+
+/* 入场：从右侧淡入滑入 */
+@keyframes floatPanelIn {
+  from {
+    opacity: 0;
+    transform: translateX(20px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+.result-actions .btn {
+  width: 100%;
+  padding: 7px 8px;
+  font-size: 12px;
+  line-height: 1.2;
+  justify-content: center;
+  white-space: nowrap;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
+}
+
+.result-actions .btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.03);
+}
+
+.result-actions .btn:active {
+  transform: translateY(0) scale(0.97);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .result-actions,
+  .result-actions .btn {
+    animation: none;
+    transition: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .extract-result {
+    flex-direction: column;
+  }
+  .result-main {
+    width: 100%;
+  }
+  .result-actions {
+    position: static;
+    width: 100%;
+    flex-direction: row;
+  }
+  .result-actions .btn {
+    flex: 1;
+  }
 }
 
 .raw-ocr-text {

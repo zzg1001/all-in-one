@@ -1522,6 +1522,68 @@ export const chatSessionsApi = {
     }),
 }
 
+// ==================== 企业信息提取 - 历史记录 ====================
+export interface ExtractRecord {
+  id: string
+  company_name?: string
+  credit_code?: string
+  data?: Record<string, any>
+  created_at?: string
+  updated_at?: string
+}
+
+export const extractHistoryApi = {
+  // 列表（全局共享）
+  list: () =>
+    request<ExtractRecord[]>('/extract/records', {
+      headers: { 'X-User-ID': getUserId() },
+    }),
+
+  // 单条
+  get: (id: string) =>
+    request<ExtractRecord>(`/extract/records/${id}`, {
+      headers: { 'X-User-ID': getUserId() },
+    }),
+
+  // 保存
+  create: (payload: { company_name?: string; credit_code?: string; data: Record<string, any> }) =>
+    request<ExtractRecord>('/extract/records', {
+      method: 'POST',
+      headers: { 'X-User-ID': getUserId() },
+      body: JSON.stringify(payload),
+    }),
+
+  // 更新（编辑后保存）
+  update: (id: string, payload: { company_name?: string; credit_code?: string; data?: Record<string, any> }) =>
+    request<ExtractRecord>(`/extract/records/${id}`, {
+      method: 'PUT',
+      headers: { 'X-User-ID': getUserId() },
+      body: JSON.stringify(payload),
+    }),
+
+  // 批量删除
+  batchDelete: (ids: string[]) =>
+    request<{ deleted: number }>('/extract/records/batch-delete', {
+      method: 'POST',
+      headers: { 'X-User-ID': getUserId() },
+      body: JSON.stringify({ ids }),
+    }),
+
+  // 单条删除
+  delete: (id: string) =>
+    request<{ message: string }>(`/extract/records/${id}`, {
+      method: 'DELETE',
+      headers: { 'X-User-ID': getUserId() },
+    }),
+
+  // 生成 Word（返回 base64）
+  word: (id: string) =>
+    request<{ success: boolean; word_file_base64: string }>(`/extract/records/${id}/word`, {
+      method: 'POST',
+      headers: { 'X-User-ID': getUserId() },
+    }),
+}
+
 // ============ Agents API (Agent 配置管理) ============
 
 export interface MemoryConfig {
@@ -2047,6 +2109,7 @@ export default {
   favorites: favoritesApi,
   dataNotes: dataNotesApi,
   chatSessions: chatSessionsApi,
+  extractHistory: extractHistoryApi,
   modules: modulesApi,
   feedback: feedbackApi,
   // Admin APIs

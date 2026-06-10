@@ -24,6 +24,12 @@ const router = createRouter({
       component: () => import('../views/home/SkillsMarketplace.vue'),
       meta: { requiresAuth: false },
     },
+    {
+      path: '/extract-history',
+      name: 'extract-history',
+      component: () => import('../views/ExtractHistoryView.vue'),
+      meta: { title: '企业信息提取历史', requiresAuth: false },
+    },
     // ============ Portal 应用 ============
     {
       path: '/app',

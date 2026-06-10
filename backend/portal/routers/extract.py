@@ -3,8 +3,8 @@
 """
 import base64
 import logging
-from typing import Optional
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from typing import Optional, Dict, Any
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Body
 from portal.services.extract_service import ExtractService
 
 logger = logging.getLogger(__name__)
@@ -83,3 +83,22 @@ async def extract_company_info(
     except Exception as e:
         logger.error(f"企业信息提取失败: {e}")
         raise HTTPException(status_code=500, detail=f"提取失败: {str(e)}")
+
+
+@router.post("/word")
+def generate_word_doc(data: Dict[str, Any] = Body(...)):
+    """用（编辑后的）企业信息数据重新生成 Word 文档
+
+    输入：企业信息 JSON（与提取结果同结构，可含用户编辑）
+    输出：{ success, word_file_base64 }
+    """
+    if not data:
+        raise HTTPException(status_code=400, detail="缺少企业信息数据")
+
+    try:
+        service = ExtractService()
+        word_base64 = service.generate_word(data)
+        return {"success": True, "word_file_base64": word_base64}
+    except Exception as e:
+        logger.error(f"生成 Word 文档失败: {e}")
+        raise HTTPException(status_code=500, detail=f"生成失败: {str(e)}")

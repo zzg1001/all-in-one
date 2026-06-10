@@ -135,19 +135,38 @@ def _parse_license_ocr(text: str) -> Dict[str, str]:
                 result['企业性质'] = etype
                 break
 
-    # 经营范围
+    # 经营范围（保留完整内容，含【一般项目】【许可项目】等分段，不做硬截断）
+    # 停止词：覆盖执照后续字段（注册资本/成立日期/法定代表人/住所等）+ 页脚噪音（证照编号/扫码登录/了解更多等）
+    _scope_stop = (r'(?:注册资本|成立日期|成立时间|注册时间|法定代表人|住\s*所|经营场所|'
+                   r'登记机关|核准日期|登记日期|营业期限|发照日期|证照编号|扫描二维码|'
+                   r'国家企业信用|了解更多|本营业执照|http|www\.|$)')
     scope_patterns = [
-        r'经营范围[：:\s]*(.+?)(?:登记机关|核准日期|营业期限|$)',
-        r'经\s*营\s*范\s*围[：:\s]*(.+?)(?:登记|核准|\n\n|$)',
+        r'经营范围[：:\s]*(.+?)' + _scope_stop,
+        r'经\s*营\s*范\s*围[：:\s]*(.+?)' + _scope_stop,
     ]
+    best_scope = ''
     for pattern in scope_patterns:
         match = re.search(pattern, text, re.DOTALL)
         if match:
-            scope = match.group(1).strip()
-            scope = re.sub(r'\s+', ' ', scope)
-            if len(scope) > 10:
-                result['经营范围'] = scope[:500]
-                break
+            scope = re.sub(r'\s+', ' ', match.group(1).strip())
+            # 取最完整（最长）的一段
+            if len(scope) > len(best_scope):
+                best_scope = scope
+    if best_scope:
+        # 二次截断：万一页脚噪音仍混入，从第一个噪音标记处截断
+        best_scope = re.split(
+            r'证照编号|扫描二维码|国家企业信用信息公示系统|了解更多登记|登记机关|'
+            r'注册资本|成立日期|成立时间|法定代表人',
+            best_scope
+        )[0]
+        best_scope = re.sub(r'【\s*】', '', best_scope)      # 去掉空的【】
+        best_scope = re.sub(r'【\s*$', '', best_scope)       # 去掉结尾未闭合的孤立【
+        best_scope = best_scope.strip()
+        # 括号配平：若【比】多（结尾闭合括号被截断/漏识别），补一个】
+        if best_scope.count('【') > best_scope.count('】'):
+            best_scope += '】'
+    if len(best_scope) > 10:
+        result['经营范围'] = best_scope[:2000]
 
     return result
 
@@ -325,6 +344,15 @@ class ExtractService:
                                 data_updated = True
                                 print(f"  填充 {data_key}: {ocr_val}")
 
+                        # 经营范围以 OCR 完整结果为准：skill 常做套话过滤/清洗导致内容变短或丢失，
+                        # 这里只要 OCR 的更完整（更长）就覆盖，保证完整经营范围不被吞掉
+                        ocr_scope = ocr_info.get('经营范围') or ''
+                        cur_scope = data.get('经营范围') or ''
+                        if ocr_scope and len(ocr_scope) > len(cur_scope):
+                            data['经营范围'] = ocr_scope
+                            data_updated = True
+                            print(f"  经营范围以OCR完整结果为准({len(ocr_scope)}字): {ocr_scope[:60]}...")
+
                     # 如果数据被更新了，重新生成 Word 文档
                     if data_updated:
                         print("\n[重新生成 Word 文档]")
@@ -345,6 +373,22 @@ class ExtractService:
                                 print("  Word 重新生成失败，使用原文件")
                         except Exception as e:
                             print(f"  Word 重新生成异常: {e}，使用原文件")
+
+                    # 计算能力标签塞进 data，便于前端展示/编辑（与 Word 一致）
+                    try:
+                        existing = data.get('能力标签')
+                        has_tags = isinstance(existing, dict) and (
+                            existing.get('核心技术') or existing.get('服务能力')
+                        )
+                        if not has_tags:
+                            from word_generator import generate_capability_tags
+                            tech_str, service_str = generate_capability_tags(data)
+                            data['能力标签'] = {
+                                '核心技术': [t for t in tech_str.split('、') if t] if tech_str else [],
+                                '服务能力': [s for s in service_str.split('、') if s] if service_str else [],
+                            }
+                    except Exception as e:
+                        print(f"[能力标签] 计算失败: {e}")
 
                     # 打印提取的数据
                     print("\n" + "=" * 60)
@@ -398,6 +442,61 @@ class ExtractService:
             try:
                 shutil.rmtree(temp_dir)
             except:
+                pass
+
+    def generate_word(self, data: Dict[str, Any]) -> str:
+        """用（编辑后的）数据重新生成 Word 文档，返回 base64
+
+        通过 skill 的 word_generator.generate_word 生成，保证与提取时格式一致。
+        """
+        from app.core.config import get_skills_storage_dir
+        from app.core.database import SessionLocal
+        from portal.models.skill import Skill
+
+        db = SessionLocal()
+        try:
+            skill_record = db.query(Skill).filter(
+                Skill.name == SKILL_NAME,
+                Skill.status == "active",
+                Skill.deleted_at.is_(None)
+            ).first()
+        finally:
+            db.close()
+
+        if not skill_record or not skill_record.folder_path:
+            raise RuntimeError(f"Skill '{SKILL_NAME}' 未找到")
+
+        skill_folder = get_skills_storage_dir() / skill_record.folder_path
+        if not skill_folder.exists():
+            raise RuntimeError("Skill 文件夹不存在")
+
+        skill_path_str = str(skill_folder)
+        if skill_path_str not in sys.path:
+            sys.path.insert(0, skill_path_str)
+
+        temp_dir = tempfile.mkdtemp(prefix="word_regen_")
+        try:
+            # 清掉缓存，确保导入当前 skill 的 word_generator
+            for m in [m for m in list(sys.modules) if m.startswith('word_generator')]:
+                del sys.modules[m]
+            from word_generator import generate_word as _gen
+
+            output_name = data.get('企业名称') or 'output'
+            safe_name = str(output_name).replace('/', '_').replace('\\', '_')
+            out_path = os.path.join(temp_dir, f"{safe_name}_企业档案.docx")
+
+            if not _gen(data, out_path):
+                raise RuntimeError("Word 生成失败")
+
+            with open(out_path, 'rb') as f:
+                return base64.b64encode(f.read()).decode('utf-8')
+        finally:
+            if skill_path_str in sys.path:
+                sys.path.remove(skill_path_str)
+            import shutil
+            try:
+                shutil.rmtree(temp_dir)
+            except Exception:
                 pass
 
     def _get_default_data(self, company_name: str, credit_code: str, website: str) -> Dict[str, Any]:
