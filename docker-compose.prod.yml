@@ -11,8 +11,10 @@ services:
     image: mysql:8.0
     container_name: ai-mysql
     restart: always
+    # 宿主机 3306 被其他程序占用，这里改用 53306 映射到容器内 3306，避免冲突。
+    # 后端仍通过 docker 内网服务名 mysql:3306 访问，不受此映射影响。
     ports:
-      - "3306:3306"
+      - "53306:3306"
     environment:
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root123456}
       MYSQL_DATABASE: ${DB_NAME:-ai_agent}
